@@ -6,6 +6,9 @@ ENV/
 .venv/
 .env/
 
+# External libraries (installed manually)
+tonic/
+
 # Python cache files
 __pycache__/
 *.py[cod]
