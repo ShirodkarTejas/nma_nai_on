@@ -60,7 +60,12 @@ def create_comprehensive_visualization(task, results, save_path):
         positions = np.array(task.position_history)
         env_history = task.env_history
         
-        # Plot trajectory segments by environment
+        # Ensure positions and environment history have matching dimensions
+        min_length = min(len(positions), len(env_history))
+        positions = positions[:min_length]
+        env_history = env_history[:min_length]
+        
+        # Create masks for different environments
         water_mask = [env == EnvironmentType.WATER for env in env_history]
         land_mask = [env == EnvironmentType.LAND for env in env_history]
         

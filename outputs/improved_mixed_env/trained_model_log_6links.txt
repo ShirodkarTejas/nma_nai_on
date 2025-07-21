@@ -1,0 +1,70 @@
+
+=== SWIMMER EXPERIMENT PARAMETER LOG ===
+Timestamp: 2025-07-19 00:53:25
+Experiment: Improved Mixed Environment Swimmer
+
+=== ENVIRONMENT PARAMETERS ===
+Swimmer Links: 6
+Oscillator Period: ncap
+Base Amplitude: a2c
+
+=== ZONE CONFIGURATION ===
+Water Zones:
+  Zone 1: center=[-0.5, 0], radius=0.3
+  Zone 2: center=[0.5, 0], radius=0.3
+
+Land Zones:
+  Zone 1: center=[0, 0], radius=0.2
+
+=== PHYSICS PROPERTIES ===
+Water Environment:
+  - Viscosity: 0.01
+  - Density: 100.0
+  - Friction: [0.01, 0.001, 0.001]
+
+Land Environment:
+  - Viscosity: 0.0
+  - Density: 1.0
+  - Friction: [1.5, 0.3, 0.3]
+
+=== SWIMMER MODEL PARAMETERS ===
+NCAP Architecture:
+  - Joints: Unknown
+  - Memory Size: 10
+  - Environment Modulation: Linear layers
+  - Oscillator Type: Square wave
+  - Phase Offsets: Linear spacing
+
+=== PERFORMANCE METRICS ===
+Total Distance Traveled: 0.1193
+Average Velocity: 0.0712
+Maximum Velocity: 0.2088
+Average Reward: 15.3288
+Environment Transitions: 0
+
+=== TRAJECTORY ANALYSIS ===
+
+Trajectory Bounds:
+  - X Range: [0.0000, 0.0024]
+  - Y Range: [0.0000, 0.1193]
+  - Total Steps: 1801
+
+Zone Analysis:
+
+  - Positions in Water Zones: 0 (0.0%)
+  - Positions in Land Zones: 1801 (100.0%)
+  - Positions in Neither: 0 (0.0%)
+
+=== ENVIRONMENT TRANSITIONS ===
+Transition History:
+
+=== FILES GENERATED ===
+Video: outputs/improved_mixed_env/improved_adaptation_6links.mp4
+Plots: outputs/improved_mixed_env/improved_environment_analysis_6links.png
+Parameter Log: outputs/improved_mixed_env/trained_model_log_6links.txt
+
+=== NOTES ===
+- Environment transitions are detected based on swimmer head position
+- Physics properties change dynamically based on current environment
+- NCAP model adapts oscillator parameters based on environment type
+- Square wave oscillators provide more aggressive movement than sine waves

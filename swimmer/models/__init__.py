@@ -1,15 +1,16 @@
 """
-Models package for swimmer training.
-Contains NCAP and other neural network models.
+Models package for swimmer neural networks.
+Contains NCAP and other swimmer model implementations.
 """
 
-from .ncap_swimmer import NCAPSwimmer, NCAPSwimmerActor, BaseSwimmerModel
-from .tonic_ncap import TonicNCAPModel, create_tonic_ncap_model
+from .base_swimmer import BaseSwimmerModel
+from .ncap_swimmer import NCAPSwimmer, NCAPSwimmerActor
+from .tonic_ncap import create_tonic_ncap_model, TonicNCAPModel
 
 __all__ = [
-    'NCAPSwimmer',
-    'NCAPSwimmerActor', 
     'BaseSwimmerModel',
-    'TonicNCAPModel',
-    'create_tonic_ncap_model'
+    'NCAPSwimmer', 
+    'NCAPSwimmerActor',
+    'create_tonic_ncap_model',
+    'TonicNCAPModel'
 ] 

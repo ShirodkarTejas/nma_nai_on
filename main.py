@@ -7,16 +7,16 @@ Main script for running the improved mixed environment swimmer with proper RL tr
 import argparse
 import os
 import sys
-from swimmer.training import SwimmerTrainer
+from swimmer.training import SwimmerTrainer, ImprovedNCAPTrainer, SimpleSwimmerTrainer
 from swimmer.environments import test_improved_mixed_environment
 
 def main():
     parser = argparse.ArgumentParser(description='Improved Mixed Environment Swimmer')
-    parser.add_argument('--mode', choices=['test', 'train', 'evaluate'], default='test',
-                       help='Mode to run: test (legacy), train (RL), or evaluate')
+    parser.add_argument('--mode', choices=['test', 'train', 'train_improved', 'train_simple', 'evaluate'], default='test',
+                       help='Mode to run: test (legacy), train (RL), train_improved (stable NCAP), train_simple (basic swimming), or evaluate')
     parser.add_argument('--model', choices=['ncap', 'mlp'], default='ncap',
                        help='Model type to use')
-    parser.add_argument('--algorithm', choices=['ppo'], default='ppo',
+    parser.add_argument('--algorithm', choices=['ppo', 'a2c'], default='ppo',
                        help='RL algorithm to use')
     parser.add_argument('--n_links', type=int, default=6,
                        help='Number of links in the swimmer')
@@ -32,34 +32,90 @@ def main():
     args = parser.parse_args()
     
     if args.mode == 'test':
-        # Run the improved mixed environment test
-        print("Running improved mixed environment test...")
+        # Legacy test function
+        print("Running legacy test function...")
+        test_improved_mixed_environment(
+            n_links=args.n_links,
+            oscillator_period=60,
+            amplitude=3.0
+        )
+    
+    elif args.mode == 'evaluate':
+        # Evaluate trained model
+        if args.load_model is None:
+            print("Error: --load_model required for evaluation mode")
+            return
         
-        # Use trained model if provided, otherwise use default
-        if args.load_model:
-            print(f"Using trained model: {args.load_model}")
-            results = test_improved_mixed_environment(
-                n_links=args.n_links, 
-                oscillator_period=60, 
-                amplitude=3.0,
-                trained_model_path=args.load_model
-            )
+        print(f"Evaluating model: {args.load_model}")
+        # Add evaluation logic here
+        
+    elif args.mode == 'train_simple':
+        # Use improved NCAP training on simple swimming environment
+        if args.model != 'ncap':
+            print("Simple training is only available for NCAP model. Setting model to 'ncap'.")
+        
+        trainer = ImprovedNCAPTrainer(
+            n_links=args.n_links,
+            training_steps=args.training_steps,
+            save_steps=args.save_steps,
+            log_episodes=args.log_episodes
+        )
+        
+        print(f"Starting NCAP training on simple swimming environment")
+        print(f"Training for {args.training_steps} steps focusing on forward movement")
+        print(f"Using proven stability fixes from ImprovedNCAPTrainer")
+        
+        # Use the simple swimming method
+        agent, env, model = trainer.train_simple_swimming()
+        
+        # Evaluate the simple swimming performance
+        print("\nEvaluating simple swimming performance...")
+        simple_results = trainer.evaluate_simple_swimming()
+        
+        print("\n=== SIMPLE SWIMMING TRAINING COMPLETED ===")
+        if simple_results['success']:
+            print("✅ SUCCESS: Model learned basic forward swimming!")
+            print(f"Distance achieved: {simple_results['avg_distance']:.3f} (target: ≥1.0)")
+            print(f"Velocity achieved: {simple_results['avg_velocity']:.3f} m/s (target: ≥0.03)")
+            print(f"Model saved to: outputs/training/simple_ncap_{args.n_links}links.pt")
+            print("\n🎯 NEXT STEP: Use this model for transfer learning to mixed environments")
         else:
-            print("Using default NCAP model")
-            results = test_improved_mixed_environment(
-                n_links=args.n_links, 
-                oscillator_period=60, 
-                amplitude=3.0
-            )
+            print("⚠️  Basic swimming needs improvement")
+            print("Consider training for more steps or adjusting hyperparameters")
         
-        if results:
-            print("\n=== IMPROVED ADAPTATION SUMMARY ===")
-            print(f"Environment transitions detected: {results['env_transitions']}")
-            print(f"Final performance: {results['avg_velocity']:.4f} avg velocity")
-            print(f"Total distance: {results['total_distance']:.4f}")
-            print(f"Maximum velocity: {results['max_velocity']:.4f}")
-            print(f"Video: outputs/improved_mixed_env/improved_adaptation_{args.n_links}links.mp4")
-            print(f"Plots: outputs/improved_mixed_env/improved_environment_analysis_{args.n_links}links.png")
+        print(f"Training logs saved to: outputs/training_logs/")
+    
+    elif args.mode == 'train_improved':
+        # Use improved NCAP training with stability measures
+        if args.model != 'ncap':
+            print("Improved training is only available for NCAP model. Setting model to 'ncap'.")
+        
+        trainer = ImprovedNCAPTrainer(
+            n_links=args.n_links,
+            training_steps=args.training_steps,
+            save_steps=args.save_steps,
+            log_episodes=args.log_episodes
+        )
+        
+        print(f"Starting improved NCAP training with stability measures")
+        print(f"Training for {args.training_steps} steps with saves every {args.save_steps} steps")
+        print(f"Using A2C algorithm optimized for NCAP stability")
+        
+        trainer.train()
+        
+        # Compare with default NCAP
+        print("\nComparing trained model with default NCAP...")
+        comparison = trainer.compare_with_default_ncap()
+        
+        print("\n=== IMPROVED TRAINING COMPLETED ===")
+        if comparison['success']:
+            print("✅ SUCCESS: Training achieved comparable performance to default NCAP!")
+            print(f"Trained model saved to: outputs/training/improved_ncap_{args.n_links}links")
+        else:
+            print("⚠️  Training completed but performance needs improvement")
+            print("Consider adjusting hyperparameters or training for more steps")
+        
+        print(f"Training logs and analysis saved to: outputs/training_logs/")
     
     elif args.mode == 'train':
         # Create trainer and train
@@ -87,50 +143,6 @@ def main():
         print(f"  Average Reward: {eval_results['avg_reward']:.4f}")
         print(f"  Average Episode Length: {eval_results['avg_length']:.1f}")
         print(f"Training logs and plots saved to: outputs/training_logs/")
-    
-    elif args.mode == 'evaluate':
-        if args.load_model is None:
-            print("Error: --load_model is required for evaluation mode")
-            sys.exit(1)
-        
-        # Create trainer and load model
-        trainer = SwimmerTrainer(
-            model_type=args.model,
-            algorithm=args.algorithm,
-            n_links=args.n_links
-        )
-        
-        print(f"Loading model from: {args.load_model}")
-        
-        # Use appropriate loading method based on model type
-        if args.model == 'ncap' and args.algorithm == 'ppo':
-            # Load Tonic model
-            trainer.load_tonic_model(args.load_model)
-        else:
-            # Load standard model
-            trainer.load_model(args.load_model)
-        
-        # Evaluate in mixed environment using existing infrastructure
-        print("Evaluating loaded model in mixed environment...")
-        mixed_env_results = trainer.evaluate_mixed_environment()
-        
-        if mixed_env_results:
-            print("\n=== MIXED ENVIRONMENT EVALUATION RESULTS ===")
-            print(f"Environment transitions detected: {mixed_env_results['env_transitions']}")
-            print(f"Final performance: {mixed_env_results['avg_velocity']:.4f} avg velocity")
-            print(f"Total distance: {mixed_env_results['total_distance']:.4f}")
-            print(f"Maximum velocity: {mixed_env_results['max_velocity']:.4f}")
-            print(f"Video: outputs/improved_mixed_env/trained_model_evaluation_{args.n_links}links.mp4")
-            print(f"Plots: outputs/improved_mixed_env/trained_model_analysis_{args.n_links}links.png")
-        
-        # Also run simple environment evaluation for comparison
-        print("\nEvaluating in simple environment for comparison...")
-        eval_results = trainer.evaluate(num_episodes=2)
-        
-        print("\n=== SIMPLE ENVIRONMENT EVALUATION RESULTS ===")
-        print(f"Average Reward: {eval_results['avg_reward']:.4f}")
-        print(f"Average Episode Length: {eval_results['avg_length']:.1f}")
-        print(f"Reward range: {min(eval_results['rewards']):.2f} - {max(eval_results['rewards']):.2f}")
 
 if __name__ == "__main__":
     main() 
