@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import collections
-from .base_swimmer import BaseSwimmerModel
 
 # ==================================================================================================
 # Weight constraints from notebook
@@ -47,7 +46,7 @@ def inhibitory_constant(shape=(1,), value=-1.):
     return nn.Parameter(torch.full(shape, value))
 
 
-class NCAPSwimmer(BaseSwimmerModel):
+class NCAPSwimmer(nn.Module):
     """
     Proper NCAP Swimmer Implementation with Biological Constraints
     Based on the notebook's SwimmerModule architecture with mixed environment adaptations.

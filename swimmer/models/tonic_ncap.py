@@ -7,7 +7,6 @@ NCAP model that works with Tonic's PPO agent.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 from .ncap_swimmer import NCAPSwimmer
 
 class SwimmerActor(nn.Module):

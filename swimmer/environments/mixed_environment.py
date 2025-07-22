@@ -7,9 +7,6 @@ Contains environment logic for mixed water/land swimming scenarios.
 import numpy as np
 import collections
 import os
-import time
-import imageio
-import torch
 import torch.nn as nn
 from dm_control import suite
 from dm_control.suite import swimmer
@@ -214,7 +211,7 @@ if not hasattr(swimmer, 'improved_mixed_env_registered'):
     def improved_mixed_environment(
         n_links=6,
         desired_speed=_SWIM_SPEED,
-        time_limit=swimmer._DEFAULT_TIME_LIMIT,
+        time_limit=3000,
         random=None,
     ):
         """Returns the improved mixed environment swim task."""
@@ -229,7 +226,7 @@ if not hasattr(swimmer, 'improved_mixed_env_registered'):
 class ImprovedMixedSwimmerEnv:
     """Wrapper class for the improved mixed environment swimmer."""
     
-    def __init__(self, n_links=6, desired_speed=_SWIM_SPEED, time_limit=1000):
+    def __init__(self, n_links=6, desired_speed=_SWIM_SPEED, time_limit=3000):
         self.env = suite.load('swimmer', 'improved_mixed_environment', 
                              task_kwargs={'random': 1, 'n_links': n_links})
         self.physics = self.env.physics

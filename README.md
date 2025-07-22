@@ -93,28 +93,33 @@ The environment will automatically detect and use GPU if available.
 
 ## 🎮 Usage
 
-### Basic Training
+### Training (recommended pipeline)
 ```bash
-python main.py --mode train --model ncap --steps 5000
+# Train NCAP with all stability fixes and automatic evaluation
+python main.py --mode train_improved --training_steps 30000 --save_steps 10000 --log_episodes 5
 ```
 
-### Evaluation
+The script will:
+1. Train for the specified steps using A2C + Tonic
+2. Save checkpoints to `outputs/training_logs/.../checkpoints` every `--save_steps`
+3. Evaluate the trained model in the mixed water→land environment, generate a video and plots in `outputs/improved_mixed_env/`
+
+### Quick Evaluation of an Existing Model
 ```bash
-python main.py --mode evaluate --model_path outputs/training/ncap_ppo_6links_tonic.pt
+# Run just the evaluation / video generation step
+python main.py --mode evaluate --load_model outputs/training/improved_ncap_6links.pt
 ```
 
-### Mixed Environment Testing
-```bash
-python main.py --mode test_mixed --model_path outputs/training/ncap_ppo_6links_tonic.pt
-```
+All other legacy modes (`train`, `train_simple`, `test_mixed`, etc.) are still available, but `train_improved` is the maintained entry-point.
 
 ## 🔬 Research Directions
 
-### Current Focus
-1. **Training Stability**: Fix PPO-NCAP compatibility issues
-2. **Numerical Stability**: Eliminate NaN values during training
-3. **Adaptation Performance**: Improve environment transition detection
-4. **Generalization**: Test on unseen environmental conditions
+### Current Focus (July 2025)
+1. **Locomotion Efficiency**: Increase forward distance (>1 m) and velocity in mixed water↔land tasks
+2. **Curriculum Learning**: Pre-train in water-only environment then transfer to mixed
+3. **Reward Shaping**: Tuned velocity targets (_SWIM_SPEED 0.3_, _CRAWL_SPEED 0.05_) and lighter activity penalty
+4. **Longer Episodes & Training Runs**: 3 000-step episodes, 30 k+ training steps
+5. **Stability Achieved**: NaN‐free training with parameter clamps and gradient sanitation
 
 ### Future Work
 - **Alternative Training Methods**: A2C, SAC, or supervised learning

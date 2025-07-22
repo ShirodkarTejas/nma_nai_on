@@ -14,7 +14,6 @@ from ..environments.tonic_wrapper import TonicSwimmerWrapper
 from ..models.ncap_swimmer import NCAPSwimmer
 from ..models.tonic_ncap import create_tonic_ncap_model
 from ..utils.training_logger import TrainingLogger
-from .custom_tonic_agent import CustomPPO
 
 class SwimmerTrainer:
     """
@@ -115,7 +114,9 @@ class SwimmerTrainer:
     
     def train_with_tonic(self):
         """Train using Tonic framework."""
-        print(f"Starting Tonic training with {self.model_type.upper()} model and {self.algorithm.upper()} algorithm")
+        from datetime import datetime
+        start_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{start_ts}] ▶ Starting Tonic training with {self.model_type.upper()} model and {self.algorithm.upper()} algorithm")
         
         # Set up Tonic logger with proper directory
         import tonic
@@ -187,7 +188,8 @@ class SwimmerTrainer:
         self.env = env
         self.model = model
         
-        print("Tonic training completed!")
+        end_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{end_ts}] ✔ Tonic training completed!")
     
     def train(self):
         """Train the model."""

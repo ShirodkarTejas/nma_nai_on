@@ -12,7 +12,6 @@ import tonic
 import tonic.torch
 from ..environments.mixed_environment import ImprovedMixedSwimmerEnv
 from ..environments.tonic_wrapper import TonicSwimmerWrapper
-from ..environments.simple_swimmer import TonicSimpleSwimmerWrapper
 from ..models.ncap_swimmer import NCAPSwimmer
 from ..models.tonic_ncap import create_tonic_ncap_model
 from ..utils.training_logger import TrainingLogger
@@ -45,7 +44,7 @@ class ImprovedNCAPTrainer(SwimmerTrainer):
         self.stability_check_frequency = 100  # Less frequent checks for faster training
         
         # Early stopping parameters
-        self.early_stopping_patience = 3  # Stop after 3 intervals without improvement
+        self.early_stopping_patience = 5  # give more time before stopping
         self.min_improvement_threshold = 0.01  # Minimum improvement to reset patience
         self.early_stopping_metric = 'reward'  # Track reward for improvement
         
@@ -237,7 +236,9 @@ class ImprovedNCAPTrainer(SwimmerTrainer):
     
     def train_with_improved_stability(self):
         """Train using improved stability measures with a proven approach."""
-        print("Starting improved NCAP training with enhanced stability measures")
+        from datetime import datetime
+        start_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{start_ts}] ▶ Starting improved NCAP training with enhanced stability measures")
         
         # Set up Tonic logger
         log_dir = os.path.join(
@@ -277,7 +278,8 @@ class ImprovedNCAPTrainer(SwimmerTrainer):
         # Print training metrics
         self._print_training_metrics()
         
-        print("Improved NCAP training completed!")
+        end_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{end_ts}] ✔ Improved NCAP training completed!")
     
     def _run_interval_training(self, agent, env, model):
         """Run training in intervals with stability checks and early stopping."""
@@ -443,75 +445,32 @@ class ImprovedNCAPTrainer(SwimmerTrainer):
         if self.model is None:
             raise ValueError("No trained model available. Train first.")
         
-        print("\n=== COMPARING TRAINED vs DEFAULT NCAP ===")
-        
-        # Test trained model
-        print("Testing trained model...")
+        print("\n=== TRAINED MODEL PERFORMANCE ===")
         trained_results = self.evaluate_mixed_environment(max_frames=1800)
-        
-        # Test default model using existing test function
-        print("Testing default NCAP model...")
-        from ..environments.mixed_environment import test_improved_mixed_environment
-        
-        default_results = test_improved_mixed_environment(
-            n_links=self.n_links,
-            oscillator_period=60,
-            amplitude=3.0
-            # Remove max_frames parameter as it's not supported
-        )
-        
-        # Compare results
-        print("\n=== PERFORMANCE COMPARISON ===")
-        print(f"Distance - Trained: {trained_results['total_distance']:.4f}, "
-              f"Default: {default_results['total_distance']:.4f}")
-        print(f"Velocity - Trained: {trained_results['avg_velocity']:.4f}, "
-              f"Default: {default_results['avg_velocity']:.4f}")
-        print(f"Env Transitions - Trained: {trained_results['env_transitions']}, "
-              f"Default: {default_results['env_transitions']}")
-        print(f"Reward - Trained: {trained_results['avg_reward']:.4f}, "
-              f"Default: {default_results.get('avg_reward', 'N/A')}")
-        
-        # Determine if training was successful for forward locomotion
+
+        # Determine success without baseline comparison (baseline removed)
         success = (
-            trained_results['total_distance'] >= 1.0 and   # Must achieve significant forward movement
-            trained_results['avg_velocity'] >= 0.03        # Must have consistent forward velocity
+            trained_results['total_distance'] >= 1.0 and
+            trained_results['avg_velocity'] >= 0.03
         )
-        
-        # Bonus points for environment adaptation (but not required for success)
         adaptive_bonus = trained_results['env_transitions'] >= 1
-        
+
+        print(f"Distance traveled: {trained_results['total_distance']:.3f} m")
+        print(f"Average velocity : {trained_results['avg_velocity']:.3f} m/s")
+        print(f"Environment transitions: {trained_results['env_transitions']}")
         print(f"\nTraining Success: {'✅ YES' if success else '❌ NO'}")
-        
-        if success:
-            print("🎯 FORWARD LOCOMOTION ACHIEVED!")
-            print(f"   ✅ Distance traveled: {trained_results['total_distance']:.3f} (target: ≥1.0)")
-            print(f"   ✅ Forward velocity: {trained_results['avg_velocity']:.3f} m/s (target: ≥0.03)")
-            if adaptive_bonus:
-                print(f"   🌟 BONUS: Environment adaptation detected ({trained_results['env_transitions']} transitions)")
-            else:
-                print(f"   📝 Environment adaptation: {trained_results['env_transitions']} transitions (test metric)")
-        else:
-            print("⚠️ FORWARD LOCOMOTION NOT ACHIEVED")
-            print(f"   Current distance: {trained_results['total_distance']:.3f} (need: ≥1.0)")
-            print(f"   Current velocity: {trained_results['avg_velocity']:.3f} m/s (need: ≥0.03)")
-            print("   💡 Model needs to learn basic forward swimming first")
-            
-            # Compare with baseline to see the gap
-            baseline_distance = default_results.get('total_distance', 0)
-            if baseline_distance > 0:
-                gap = baseline_distance / max(trained_results['total_distance'], 0.001)
-                print(f"   📊 Default NCAP achieves {baseline_distance:.3f} distance ({gap:.1f}x better)")
         
         return {
             'success': success,
             'forward_locomotion': success,
             'adaptive_bonus': adaptive_bonus,
             'trained_results': trained_results,
-            'default_results': default_results
+            'default_results': None
         } 
 
     def create_simple_tonic_environment(self):
-        """Create simple swimmer environment for basic forward movement training."""
+        """Create simple swimmer environment lazily (only if method used)."""
+        from ..environments.simple_swimmer import TonicSimpleSwimmerWrapper  # local import to avoid hard dependency
         return TonicSimpleSwimmerWrapper(n_links=self.n_links, time_feature=True, desired_speed=0.1)
     
     def train_simple_swimming(self):
