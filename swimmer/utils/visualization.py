@@ -12,7 +12,11 @@ from ..environments.environment_types import EnvironmentType
 
 def create_comprehensive_visualization(task, results, save_path):
     """Create comprehensive visualization of environment zones, swimmer trajectory, and performance."""
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(3, 2, figsize=(16, 18))
+    ax1, ax2 = axes[0, 0], axes[0, 1]
+    ax3, ax4 = axes[1, 0], axes[1, 1]
+    ax5 = axes[2, 0]
+    fig.delaxes(axes[2, 1]) # Remove the unused subplot
     
     # Debug: Print actual trajectory data
     if hasattr(task, 'position_history') and task.position_history:
@@ -143,6 +147,18 @@ def create_comprehensive_visualization(task, results, save_path):
         ax4.text(0.02, 0.98, f'Transitions: {transitions}', 
                 transform=ax4.transAxes, verticalalignment='top',
                 bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
+
+    # Plot 5: Action history
+    ax5.set_title('Joint Torques Over Time', fontsize=14, fontweight='bold')
+    ax5.set_xlabel('Time Step')
+    ax5.set_ylabel('Torque')
+    ax5.grid(True, alpha=0.3)
+    
+    if hasattr(task, 'action_history') and task.action_history:
+        actions = np.array(task.action_history)
+        for i in range(actions.shape[1]):
+            ax5.plot(actions[:, i], label=f'Joint {i+1}')
+        ax5.legend()
     
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -277,4 +293,46 @@ def add_zone_overlay(frame, task, current_env):
     """Add visual zone overlay to the rendered frame."""
     # For now, just return the original frame to avoid overlay issues
     # The zone visualization will be shown in the plots instead
-    return frame 
+    return frame
+
+def plot_training_results(log_file, save_path):
+    """
+    Plots training results from a Tonic log file.
+    """
+    import pandas as pd
+    import seaborn as sns
+
+    try:
+        df = pd.read_csv(log_file)
+        
+        fig, axes = plt.subplots(1, 2, figsize=(18, 6))
+        
+        # Plot 1: Episode Score
+        if 'test/episode_score/mean' in df.columns:
+            ax1 = sns.lineplot(x='step', y='test/episode_score/mean', data=df, ax=axes[0], label='Mean Score')
+            ax1.set_title('Training Score Over Time')
+            ax1.set_xlabel('Training Step')
+            ax1.set_ylabel('Mean Episode Score')
+            ax1.grid(True)
+
+            if 'test/episode_score/std' in df.columns:
+                ax1.fill_between(df['step'], df['test/episode_score/mean'] - df['test/episode_score/std'],
+                                 df['test/episode_score/mean'] + df['test/episode_score/std'], alpha=0.2)
+
+        # Plot 2: Episode Length
+        if 'test/episode_length/mean' in df.columns:
+            ax2 = sns.lineplot(x='step', y='test/episode_length/mean', data=df, ax=axes[1], label='Mean Length', color='orange')
+            ax2.set_title('Episode Length Over Time')
+            ax2.set_xlabel('Training Step')
+            ax2.set_ylabel('Mean Episode Length')
+            ax2.grid(True)
+        
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300)
+        plt.close()
+        print(f"Training plots saved to {save_path}")
+
+    except FileNotFoundError:
+        print(f"Log file not found at {log_file}")
+    except Exception as e:
+        print(f"Could not plot training results: {e}") 

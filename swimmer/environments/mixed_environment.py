@@ -39,19 +39,16 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
         self._desired_speed = desired_speed
         # Zone layout based on where swimmer actually starts (near [0,0])
         self.water_zones = [
-            {'center': [-0.5, 0], 'radius': 0.3},   # Left water zone (smaller)
-            {'center': [0.5, 0], 'radius': 0.3},    # Right water zone (smaller)
+            {'center': [-2, 0], 'radius': 1.0},   # Left water zone
+            {'center': [2, 0], 'radius': 1.0},    # Right water zone
         ]
-        self.land_zones = [
-            {'center': [0, 0], 'radius': 0.2},      # Small central land zone
-        ]
+        self.land_zones = [] # No more land zones, land is the default
         
     def initialize_episode(self, physics):
         super().initialize_episode(physics)
         
-        # Set default physics (water-like) - much more permissive
-        physics.model.opt.viscosity = 0.01  # Very low viscosity for fast movement
-        physics.model.opt.density = 100.0   # Much lower density
+        # Set default physics to land
+        self.apply_environment_physics(physics, EnvironmentType.LAND)
         
         # Hide target
         physics.named.model.mat_rgba['target', 'a'] = 1
@@ -68,6 +65,7 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
         # Initialize tracking for visualization
         self.position_history = []
         self.env_history = []
+        self.action_history = []
         
     def get_current_environment(self, physics):
         """Detect current environment based on swimmer position."""
@@ -96,8 +94,8 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
             if distance <= zone['radius']:
                 return EnvironmentType.LAND
         
-        # Default to water if not in any specific zone
-        return EnvironmentType.WATER
+        # Default to land if not in any specific zone
+        return EnvironmentType.LAND
     
     def apply_environment_physics(self, physics, env_type):
         """Apply physics based on current environment."""
@@ -143,14 +141,15 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
             self.env_history = []
         self.env_history.append(current_env)
         
+        # Track action history for visualization
+        if not hasattr(self, 'action_history'):
+            self.action_history = []
+        
         # Environment encoding
         if current_env == EnvironmentType.WATER:
             obs['environment_type'] = np.array([1.0, 0.0])  # [water, land] one-hot
         else:
             obs['environment_type'] = np.array([0.0, 1.0])  # [water, land] one-hot
-        
-        # Add position information for environment detection
-        obs['head_position'] = head_pos
         
         # Add environment transition indicators
         obs['in_water_zone'] = np.array([1.0 if current_env == EnvironmentType.WATER else 0.0])
@@ -159,9 +158,8 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
         return obs
     
     def get_reward(self, physics):
-        forward_velocity = physics.named.data.sensordata['head_vel'][1]
-        
-        # Base reward for forward movement
+        # Primary reward: forward velocity
+        forward_velocity = -physics.named.data.sensordata['head_vel'][1]
         reward = rewards.tolerance(
             forward_velocity,
             bounds=(self._desired_speed, float('inf')),
@@ -169,29 +167,30 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
             value_at_margin=0.,
             sigmoid='linear',
         )
-        
-        # Bonus for efficient movement in current environment
+
+        # Environment-specific rewards
         current_env = self.get_current_environment(physics)
+        joint_velocities = physics.data.qvel
+        
         if current_env == EnvironmentType.WATER:
-            # Bonus for smooth swimming motion
-            joint_velocities = physics.data.qvel
-            smoothness = 1.0 / (1.0 + np.sum(joint_velocities**2))
-            reward += smoothness * 0.5  # Much higher bonus
-        else:
-            # Bonus for effective crawling motion
-            joint_velocities = physics.data.qvel
-            activity = np.sum(joint_velocities**2)
-            reward += activity * 0.3  # Much higher bonus
+            # Reward for smooth, efficient swimming
+            smoothness_penalty = np.sum(np.square(joint_velocities))
+            reward -= smoothness_penalty * 0.01
+
+        else: # Land
+            # Reward for powerful crawling motion
+            activity_bonus = np.sum(np.square(joint_velocities))
+            reward += activity_bonus * 0.05
+
+        # Penalty for excessive torque to encourage efficiency
+        torque_penalty = np.sum(np.square(physics.data.ctrl))
+        reward -= torque_penalty * 0.001
         
-        # Strong bonus for forward progress (encourage crossing the land zone)
+        # Bonus for approaching water zones
         head_pos = physics.named.data.xpos['head', :2]
-        progress = head_pos[1] - self._initial_position[1]  # Y-direction progress
-        reward += progress * 2.0  # Much stronger bonus for forward progress
-        
-        # Bonus for moving away from center (encourage crossing zones)
-        distance_from_center = np.linalg.norm(head_pos)
-        reward += distance_from_center * 0.5  # Bonus for moving away from center
-        
+        min_dist_to_water = min(np.linalg.norm(head_pos - np.array(zone['center'])) for zone in self.water_zones)
+        reward += (1.0 / (1.0 + min_dist_to_water**2)) * 0.1 # Use squared distance
+
         return reward
 
 # --- Register improved mixed environment task ---
@@ -231,6 +230,7 @@ class ImprovedMixedSwimmerEnv:
     
     def step(self, action):
         """Take a step in the environment."""
+        self.env.task.action_history.append(action)
         time_step = self.env.step(action)
         self.done = time_step.last()
         return time_step.observation, time_step.reward, self.done, {}

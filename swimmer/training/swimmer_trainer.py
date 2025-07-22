@@ -23,7 +23,7 @@ class SwimmerTrainer:
     """
     def __init__(self, model_type='ncap', algorithm='ppo', n_links=6, 
                  training_steps=500000, save_steps=100000, 
-                 output_dir='outputs/training', log_episodes=10):
+                 output_dir='outputs/training', log_episodes=10, action_scale=1.0):
         self.model_type = model_type.lower()
         self.algorithm = algorithm.lower()
         self.n_links = n_links
@@ -58,7 +58,7 @@ class SwimmerTrainer:
     
     def create_tonic_environment(self):
         """Create Tonic-compatible environment."""
-        return TonicSwimmerWrapper(n_links=self.n_links, time_feature=True)
+        return TonicSwimmerWrapper(n_links=self.n_links, time_feature=True, action_scale=self.action_scale)
     
     def create_ncap_model(self, n_joints):
         """Create NCAP model."""
@@ -420,18 +420,8 @@ class SwimmerTrainer:
         env_transitions = 0
         
         while frame_count < max_frames:
-            # Convert observation to Tonic format if needed
-            if isinstance(obs, dict):
-                # Flatten the observation dictionary
-                tonic_obs = np.concatenate([
-                    obs['joints'],
-                    obs['environment_type'],
-                    obs['head_position'],
-                    obs['in_water_zone'],
-                    obs['in_land_zone']
-                ])
-            else:
-                tonic_obs = obs
+            # Convert observation to Tonic format
+            tonic_obs = self.env._process_observation(obs)
             
             # Get action from trained model
             with torch.no_grad():
@@ -557,14 +547,13 @@ class SwimmerTrainer:
         agent.save(save_path)
         print(f"Tonic model saved to {save_path}")
     
-    def load_tonic_model(self, filename):
-        """Load a Tonic-trained model."""
-        # Handle both relative and absolute paths
-        if os.path.isabs(filename):
-            load_path = filename
+    def load_tonic_model(self, model_name):
+        """Load a trained Tonic model."""
+        if os.path.isabs(model_name):
+            load_path = model_name
         else:
-            load_path = os.path.join(self.output_dir, filename)
-        
+            load_path = os.path.join(self.output_dir, model_name)
+
         if not os.path.exists(load_path):
             raise FileNotFoundError(f"Model file not found: {load_path}")
         
