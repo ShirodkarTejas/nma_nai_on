@@ -189,6 +189,14 @@ class NCAPSwimmer(BaseSwimmerModel):
         Returns:
             Joint torques in [-1, 1] range (properly bounded!)
         """
+        # ------------------------------------------------------------------
+        # Hard biological constraints – keep every weight within its valid
+        # range *before* any computations.  This prevents values that the
+        # optimiser pushed out-of-range from generating huge activations that
+        # later explode to NaN.
+        # ------------------------------------------------------------------
+        self._constrain_parameters()
+        
         # Handle device and input conversion
         if not isinstance(joint_pos, torch.Tensor):
             joint_pos = torch.tensor(joint_pos, dtype=torch.float32, device=self._device)
@@ -330,6 +338,37 @@ class NCAPSwimmer(BaseSwimmerModel):
             final_torques = torch.zeros_like(final_torques)
         
         return final_torques
+
+    # ------------------------------------------------------------------
+    # Parameter safety clamp
+    # ------------------------------------------------------------------
+    def _constrain_parameters(self):
+        """Clamp NCAP parameters to biologically valid ranges.
+
+        • Excitatory weights  : 0 … 1
+        • Inhibitory weights : –1 … 0
+        • Adaptation layers  : –0.3 … 0.3 (small influence)
+        """
+        with torch.no_grad():
+            for name, p in self.params.items():
+                # Heuristic: muscles and b-neurons obey their designated sign
+                if 'muscle' in name or 'bneuron' in name or 'prop' in name or 'osc' in name:
+                    if 'contra' in name or 'v_d_' in name or 'muscle_contra' in name or '_v_' in name and 'muscle_v_d_' not in name:
+                        # Inhibitory
+                        p.clamp_(-1.0, 0.0)
+                    else:
+                        # Excitatory
+                        p.clamp_(0.0, 1.0)
+
+            # Environment modulation and memory adaptor weights should stay small
+            small_modules = ['env_modulation', 'amplitude_modulation', 'memory_decoder']
+            for mod_name in small_modules:
+                if hasattr(self, mod_name):
+                    mod = getattr(self, mod_name)
+                    if hasattr(mod, 'weight'):
+                        mod.weight.data.clamp_(-0.3, 0.3)
+                    if hasattr(mod, 'bias') and mod.bias is not None:
+                        mod.bias.data.clamp_(-0.3, 0.3)
 
 
 class NCAPSwimmerActor(nn.Module):

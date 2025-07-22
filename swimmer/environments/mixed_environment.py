@@ -27,8 +27,8 @@ from .environment_types import EnvironmentType
 # Set environment variable for rendering
 os.environ['MUJOCO_GL'] = 'egl'
 
-_SWIM_SPEED = 0.3  # Increased for faster movement
-_CRAWL_SPEED = 0.15  # Increased for faster movement
+_SWIM_SPEED = 0.3      # target speed when in water
+_CRAWL_SPEED = 0.05     # much lower target when crawling on land
 
 # --- Improved Mixed Environment Task ---
 class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
@@ -37,18 +37,18 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
     def __init__(self, desired_speed=_SWIM_SPEED, **kwargs):
         super().__init__(**kwargs)
         self._desired_speed = desired_speed
-        # Zone layout based on where swimmer actually starts (near [0,0])
-        self.water_zones = [
-            {'center': [-2, 0], 'radius': 1.0},   # Left water zone
-            {'center': [2, 0], 'radius': 1.0},    # Right water zone
+        # Default environment is now WATER; define a few *land* patches.
+        self.water_zones = []  # Everywhere is water unless inside a land zone
+        self.land_zones = [
+            {'center': [-2, 0], 'radius': 1.0},   # Left land island
+            {'center': [2, 0], 'radius': 1.0},    # Right land island
         ]
-        self.land_zones = [] # No more land zones, land is the default
         
     def initialize_episode(self, physics):
         super().initialize_episode(physics)
         
-        # Set default physics to land
-        self.apply_environment_physics(physics, EnvironmentType.LAND)
+        # Default physics is now WATER
+        self.apply_environment_physics(physics, EnvironmentType.WATER)
         
         # Hide target
         physics.named.model.mat_rgba['target', 'a'] = 1
@@ -82,20 +82,20 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
                 print(f"Land zone {i}: center={zone['center']}, radius={zone['radius']}, distance={distance}")
             self._debug_printed = True
         
-        # Check if in water zone
-        for zone in self.water_zones:
-            distance = np.linalg.norm(head_pos - np.array(zone['center']))
-            if distance <= zone['radius']:
-                return EnvironmentType.WATER
-        
-        # Check if in land zone
+        # Check if in land zone first (islands of land)
         for zone in self.land_zones:
             distance = np.linalg.norm(head_pos - np.array(zone['center']))
             if distance <= zone['radius']:
                 return EnvironmentType.LAND
-        
-        # Default to land if not in any specific zone
-        return EnvironmentType.LAND
+
+        # Check if in water zone (currently none, but keep for flexibility)
+        for zone in self.water_zones:
+            distance = np.linalg.norm(head_pos - np.array(zone['center']))
+            if distance <= zone['radius']:
+                return EnvironmentType.WATER
+
+        # Default environment is WATER
+        return EnvironmentType.WATER
     
     def apply_environment_physics(self, physics, env_type):
         """Apply physics based on current environment."""
@@ -158,38 +158,53 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
         return obs
     
     def get_reward(self, physics):
-        # Primary reward: forward velocity
-        forward_velocity = -physics.named.data.sensordata['head_vel'][1]
-        reward = rewards.tolerance(
+        # Determine current medium first
+        current_env = self.get_current_environment(physics)
+
+        # Primary reward: forward velocity (positive along +x direction)
+        # Positive x-direction is forward for the swimmer model.
+        forward_velocity = physics.named.data.sensordata['head_vel'][0]
+
+        # Use different speed targets depending on medium
+        target_speed = _SWIM_SPEED if current_env == EnvironmentType.WATER else _CRAWL_SPEED
+
+        reward = 2.0 * rewards.tolerance(  # doubled weight
             forward_velocity,
-            bounds=(self._desired_speed, float('inf')),
-            margin=self._desired_speed,
+            bounds=(target_speed, float('inf')),
+            margin=target_speed,
             value_at_margin=0.,
             sigmoid='linear',
         )
 
-        # Environment-specific rewards
-        current_env = self.get_current_environment(physics)
+        # Environment-specific rewards (reuse current_env)
         joint_velocities = physics.data.qvel
         
+        # Penalize excessive joint activity in both environments to discourage
+        # "thrashing" that produces high rewards without locomotion.
+        activity_penalty = np.sum(np.square(joint_velocities))
+
         if current_env == EnvironmentType.WATER:
-            # Reward for smooth, efficient swimming
-            smoothness_penalty = np.sum(np.square(joint_velocities))
-            reward -= smoothness_penalty * 0.01
+            # Encourage smooth swimming by lightly penalizing large joint speeds.
+            reward -= activity_penalty * 0.001  # lighter penalty in water
 
-        else: # Land
-            # Reward for powerful crawling motion
-            activity_bonus = np.sum(np.square(joint_velocities))
-            reward += activity_bonus * 0.05
-
+        else:  # Land
+            # On land, *penalize* rather than reward erratic motion.
+            reward -= activity_penalty * 0.001  # lighter penalty on land
+        
         # Penalty for excessive torque to encourage efficiency
         torque_penalty = np.sum(np.square(physics.data.ctrl))
         reward -= torque_penalty * 0.001
+
+        # Small constant incentive to keep moving (helps exploration).
+        reward += 0.01
         
-        # Bonus for approaching water zones
-        head_pos = physics.named.data.xpos['head', :2]
-        min_dist_to_water = min(np.linalg.norm(head_pos - np.array(zone['center'])) for zone in self.water_zones)
-        reward += (1.0 / (1.0 + min_dist_to_water**2)) * 0.1 # Use squared distance
+        # Bonus for approaching land patches (if water_zones defined) or vice-versa
+        if self.water_zones:
+            head_pos = physics.named.data.xpos['head', :2]
+            min_dist_to_water = min(
+                np.linalg.norm(head_pos - np.array(zone['center'])) for zone in self.water_zones
+            )
+            reward += (1.0 / (1.0 + min_dist_to_water**2)) * 0.1  # incentive towards targets
 
         return reward
 

@@ -31,6 +31,11 @@ class SwimmerTrainer:
         self.save_steps = save_steps
         self.output_dir = output_dir
         self.log_episodes = log_episodes
+
+        # Store the action scaling factor so that environments and wrappers
+        # that depend on it (e.g.
+        # `TonicSwimmerWrapper` in `create_tonic_environment`) can access it.
+        self.action_scale = action_scale
         
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
@@ -57,8 +62,8 @@ class SwimmerTrainer:
         return ImprovedMixedSwimmerEnv(n_links=self.n_links)
     
     def create_tonic_environment(self):
-        """Create Tonic-compatible environment."""
-        return TonicSwimmerWrapper(n_links=self.n_links, time_feature=True, action_scale=self.action_scale)
+        """Create Tonic-compatible environment (no action scaling needed)."""
+        return TonicSwimmerWrapper(n_links=self.n_links, time_feature=True)
     
     def create_ncap_model(self, n_joints):
         """Create NCAP model."""

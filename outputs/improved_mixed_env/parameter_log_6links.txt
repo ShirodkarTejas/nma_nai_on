@@ -1,6 +1,6 @@
 
 === SWIMMER EXPERIMENT PARAMETER LOG ===
-Timestamp: 2025-07-19 00:53:57
+Timestamp: 2025-07-22 15:49:32
 Experiment: Improved Mixed Environment Swimmer
 
 === ENVIRONMENT PARAMETERS ===
@@ -10,11 +10,10 @@ Base Amplitude: 3.0
 
 === ZONE CONFIGURATION ===
 Water Zones:
-  Zone 1: center=[-0.5, 0], radius=0.3
-  Zone 2: center=[0.5, 0], radius=0.3
 
 Land Zones:
-  Zone 1: center=[0, 0], radius=0.2
+  Zone 1: center=[-2, 0], radius=1.0
+  Zone 2: center=[2, 0], radius=1.0
 
 === PHYSICS PROPERTIES ===
 Water Environment:
@@ -36,28 +35,27 @@ NCAP Architecture:
   - Phase Offsets: Linear spacing
 
 === PERFORMANCE METRICS ===
-Total Distance Traveled: 0.2449
-Average Velocity: 0.0869
-Maximum Velocity: 0.2673
-Average Reward: 48.0111
-Environment Transitions: 1
+Total Distance Traveled: 0.2146
+Average Velocity: 0.0577
+Maximum Velocity: 0.1931
+Average Reward: -0.0363
+Environment Transitions: 0
 
 === TRAJECTORY ANALYSIS ===
 
 Trajectory Bounds:
-  - X Range: [-0.2199, 0.0249]
-  - Y Range: [-0.0394, 0.0962]
+  - X Range: [-0.0836, 0.0335]
+  - Y Range: [-0.2048, 0.0108]
   - Total Steps: 1801
 
 Zone Analysis:
 
-  - Positions in Water Zones: 25 (1.4%)
-  - Positions in Land Zones: 1775 (98.6%)
-  - Positions in Neither: 1 (0.1%)
+  - Positions in Water Zones: 0 (0.0%)
+  - Positions in Land Zones: 0 (0.0%)
+  - Positions in Neither: 1801 (100.0%)
 
 === ENVIRONMENT TRANSITIONS ===
 Transition History:
-  Step 1775: land -> water
 
 === FILES GENERATED ===
 Video: outputs/improved_mixed_env/improved_adaptation_6links.mp4
