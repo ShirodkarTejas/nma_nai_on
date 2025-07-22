@@ -626,21 +626,3 @@ class SwimmerTrainer:
         print(f"Model type: {checkpoint['model_type']}")
         print(f"Algorithm: {checkpoint['algorithm']}")
         print(f"Training steps: {checkpoint['training_steps']}")
-
-class PPOAgent:
-    """Simple PPO agent wrapper (placeholder for Tonic integration)."""
-    def __init__(self, model):
-        self.model = model
-    
-    def act(self, obs):
-        """Get action from model."""
-        # This is a simplified version
-        # In the future, this would use proper PPO policy
-        if isinstance(obs, dict):
-            joint_pos = obs['joints']
-        else:
-            joint_pos = obs[:self.model.n_joints]
-        
-        with torch.no_grad():
-            action = self.model(torch.tensor(joint_pos, dtype=torch.float32).unsqueeze(0))
-            return action.cpu().numpy() 
