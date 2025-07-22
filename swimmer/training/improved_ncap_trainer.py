@@ -56,7 +56,9 @@ class ImprovedNCAPTrainer(SwimmerTrainer):
             'oscillator_drift': [],
             'interval_rewards': [],  # Track rewards per interval for early stopping
             'best_reward': float('-inf'),
-            'patience_counter': 0
+            'patience_counter': 0,
+            'viscosities': [],   # log sampled viscosity per interval evaluation
+            'visc_rewards': []   # corresponding rewards
         }
         
     def create_improved_ncap_model(self, n_joints):
@@ -280,13 +282,19 @@ class ImprovedNCAPTrainer(SwimmerTrainer):
 
         # Plot interval reward progression
         from ..utils.visualization import plot_training_interval_rewards
+        from ..utils.visualization import plot_reward_vs_viscosity
         interval_plot = os.path.join('outputs','training_logs',f'interval_rewards_{self.n_links}links.png')
         plot_training_interval_rewards(self.training_metrics['interval_rewards'], interval_plot)
         print(f"Interval reward plot saved to {interval_plot}")
 
+        # Scatter reward vs viscosity
+        scatter_path = os.path.join('outputs','training_logs',f'reward_vs_viscosity_{self.n_links}links.png')
+        plot_reward_vs_viscosity(self.training_metrics['viscosities'], self.training_metrics['visc_rewards'], scatter_path)
+        print(f"Reward-vs-viscosity plot saved to {scatter_path}")
+
         # --- Automatic mixed-environment evaluation ---
         print("\nRunning post-training evaluation …")
-        eval_results = self.evaluate_mixed_environment(max_frames=1800)
+        eval_results = self.evaluate_mixed_environment(max_frames=1800, speed_factor=1.0)
         print(f"Distance travelled post-training: {eval_results['total_distance']:.3f} m")
         
         end_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -337,6 +345,14 @@ class ImprovedNCAPTrainer(SwimmerTrainer):
                 print(f"⚠️ Training interval had issues: {e}")
                 self.apply_parameter_constraints(model)
             
+            # Log viscosity --> reward pair for scatter plot
+            try:
+                current_visc = env.env.task.current_viscosity
+                self.training_metrics['viscosities'].append(current_visc)
+                self.training_metrics['visc_rewards'].append(interval_reward)
+            except Exception:
+                pass
+
             # **EARLY STOPPING CHECK**
             interval_reward = self._evaluate_interval_performance(agent, env)
             self.training_metrics['interval_rewards'].append(interval_reward)

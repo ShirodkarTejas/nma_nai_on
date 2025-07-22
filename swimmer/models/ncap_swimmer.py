@@ -118,8 +118,9 @@ class NCAPSwimmer(nn.Module):
         
         # Environment adaptation modules (our addition)
         if self.include_environment_adaptation:
-            self.env_modulation = nn.Linear(2, n_joints)      # Environment type -> joint modulation
-            self.amplitude_modulation = nn.Linear(2, 1)       # Environment type -> amplitude scaling
+            self.env_modulation = nn.Linear(3, n_joints)      # [water, land, viscosity] -> joint modulation
+            self.amplitude_modulation = nn.Linear(3, 1)       # amplitude scaling
+            self.period_modulation = nn.Linear(3, 1)          # oscillator period scaling
             self.memory_encoder = nn.LSTM(input_size=2, hidden_size=16, num_layers=1, batch_first=True)
             self.memory_decoder = nn.Linear(16, n_joints)
             
@@ -141,6 +142,9 @@ class NCAPSwimmer(nn.Module):
             
             nn.init.uniform_(self.amplitude_modulation.weight, -0.1, 0.1)
             nn.init.constant_(self.amplitude_modulation.bias, 0.0)
+
+            nn.init.uniform_(self.period_modulation.weight, -0.1, 0.1)
+            nn.init.constant_(self.period_modulation.bias, 0.0)
             
             # Initialize LSTM and decoder
             for name, param in self.memory_encoder.named_parameters():
@@ -300,17 +304,27 @@ class NCAPSwimmer(nn.Module):
                 if env_tensor.dim() == 1:
                     env_tensor = env_tensor.unsqueeze(0)
                 
-                # Environment modulation (small effect)
                 env_modulation = self.env_modulation(env_tensor)
                 env_modulation = torch.clamp(env_modulation, -0.3, 0.3)  # Keep small
-                
+
+                # New: amplitude scaling factor (learns to modulate stroke strength)
+                amp_mod = self.amplitude_modulation(env_tensor)  # shape (1,1)
+                amp_scale = (1.0 + torch.clamp(amp_mod, -0.8, 0.8)).squeeze(0)  # 0.2 – 1.8 range
+
+                # Period modulation
+                per_mod = self.period_modulation(env_tensor)
+                per_scale = (1.0 + torch.clamp(per_mod, -0.5, 0.5)).squeeze(0)  # 0.5 – 1.5 range
+
                 # Memory context
                 memory_context = self.get_memory_context()
                 memory_context = torch.clamp(memory_context, -0.2, 0.2)  # Keep small
-                
+
                 # Apply adaptations (small influence to preserve biological behavior)
-                final_torques = base_torques + 0.1 * env_modulation.squeeze(0) + 0.05 * memory_context
-                
+                final_torques = (base_torques + 0.1 * env_modulation.squeeze(0) + 0.05 * memory_context) * amp_scale
+
+                # Adjust effective oscillator period for next step (in-place update)
+                self.effective_period = max(4, min(int(self.oscillator_period * per_scale.item()), 120))
+              
             except Exception as e:
                 print(f"Warning: Environment adaptation failed: {e}")
                 final_torques = base_torques
@@ -335,6 +349,11 @@ class NCAPSwimmer(nn.Module):
         
         # Update timestep
         self.timestep += 1
+
+        # Previously we reset phase whenever timestep exceeded the period, which damped oscillations
+        # Keeping phase continuous allows larger sustained tail swings.
+        # if getattr(self, 'effective_period', None) is not None and self.timestep >= self.effective_period:
+        #     self.timestep = 0
         
         # Handle output dimension
         if squeeze_output:
@@ -391,6 +410,15 @@ class NCAPSwimmerActor(nn.Module):
         if isinstance(observations, dict):
             joint_pos = observations['joints']
             environment_type = observations.get('environment_type', None)
+            viscosity = observations.get('fluid_viscosity', None)
+
+            if environment_type is not None and viscosity is not None:
+                # Build [water, land, viscosity_norm] vector
+                water_flag, land_flag = environment_type
+                # Normalize viscosity to 0..1 logarithmically between 1e-4 and 0.3
+                vis = float(viscosity[0]) if isinstance(viscosity, (list, np.ndarray)) else float(viscosity)
+                vis_norm = np.clip((np.log10(vis) - np.log10(1e-4)) / (np.log10(3e-1) - np.log10(1e-4)), 0.0, 1.0)
+                environment_type = np.array([water_flag, land_flag, vis_norm], dtype=np.float32)
         else:
             # Assume observations are joint positions
             joint_pos = observations[:self.swimmer.n_joints]

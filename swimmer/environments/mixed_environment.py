@@ -24,8 +24,8 @@ from .environment_types import EnvironmentType
 # Set environment variable for rendering
 os.environ['MUJOCO_GL'] = 'egl'
 
-_SWIM_SPEED = 0.3      # target speed when in water
-_CRAWL_SPEED = 0.05     # much lower target when crawling on land
+_SWIM_SPEED = 0.15      # lowered target speed to give higher velocity rewards
+_CRAWL_SPEED = 0.08     # slightly higher crawl speed target
 
 # --- Improved Mixed Environment Task ---
 class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
@@ -34,6 +34,7 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
     def __init__(self, desired_speed=_SWIM_SPEED, **kwargs):
         super().__init__(**kwargs)
         self._desired_speed = desired_speed
+        self.current_viscosity = 1e-4  # default before initialize_episode
         # Default environment is now WATER; define a few *land* patches.
         self.water_zones = []  # Everywhere is water unless inside a land zone
         self.land_zones = [
@@ -52,6 +53,16 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
 
         # -------- Curriculum: gradually shrink land islands --------
         self._episode_counter += 1
+
+        # ---------- Domain-randomise water viscosity ----------
+        # Sample from log-uniform distribution between 1e-4 and 3e-1
+        # Lower floor so some episodes are extremely low-drag
+        log_visc = np.random.uniform(np.log10(1e-5), np.log10(3e-1))
+        self.current_viscosity = 10 ** log_visc
+
+        # Apply initial physics with this viscosity
+        self.apply_environment_physics(physics, EnvironmentType.WATER)
+        
         shrink_steps = [0, 10, 20]  # episode indices where we shrink radius
         radii         = [1.0, 0.8, 0.6]
 
@@ -110,29 +121,34 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
     def apply_environment_physics(self, physics, env_type):
         """Apply physics based on current environment."""
         if env_type == EnvironmentType.WATER:
-            # Water physics - very low friction, low viscosity for fast swimming
-            physics.model.opt.viscosity = 0.01
-            physics.model.opt.density = 100.0
+            # Water physics – use episode-specific viscosity
+            viscosity = getattr(self, 'current_viscosity', 1e-4)
+            physics.model.opt.viscosity = viscosity
+            # Leave density at MuJoCo default to avoid extra quadratic drag
             
             # Very low friction for fast swimming
+            # Restore near-default capsule friction (MuJoCo swimmer.xml ≈ 0.1, 0.005, 0.0001)
             for geom_id in range(physics.model.ngeom):
                 if physics.model.geom_type[geom_id] == enums.mjtGeom.mjGEOM_CAPSULE:
-                    physics.model.geom_friction[geom_id] = [0.01, 0.001, 0.001]  # Very low friction
+                    physics.model.geom_friction[geom_id] = [0.1, 0.005, 0.0001]
                     
         elif env_type == EnvironmentType.LAND:
             # Land physics - high friction, no viscosity
-            physics.model.opt.viscosity = 0.0
-            physics.model.opt.density = 1.0
+            physics.model.opt.viscosity = 0.0  # No fluid drag on land
+            # Leave density unchanged (default ~1.0-air)
             
             # High friction for crawling
             for geom_id in range(physics.model.ngeom):
                 if physics.model.geom_type[geom_id] == enums.mjtGeom.mjGEOM_CAPSULE:
-                    physics.model.geom_friction[geom_id] = [1.5, 0.3, 0.3]  # Higher friction
+                    physics.model.geom_friction[geom_id] = [0.2, 0.05, 0.01]  # Moderate land friction
     
     def get_observation(self, physics):
         obs = collections.OrderedDict()
         obs['joints'] = physics.joints()
         obs['body_velocities'] = physics.body_velocities()
+
+        # ---------- New feature: expose current viscosity ----------
+        obs['fluid_viscosity'] = np.array([self.current_viscosity], dtype=np.float32)
         
         # Detect current environment
         current_env = self.get_current_environment(physics)
@@ -178,7 +194,8 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
         # Use different speed targets depending on medium
         target_speed = _SWIM_SPEED if current_env == EnvironmentType.WATER else _CRAWL_SPEED
 
-        reward = 2.0 * rewards.tolerance(  # doubled weight
+        # Stronger weight and lower target speed make forward progress more lucrative
+        reward = 3.0 * rewards.tolerance(
             forward_velocity,
             bounds=(target_speed, float('inf')),
             margin=target_speed,
@@ -195,15 +212,18 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
 
         if current_env == EnvironmentType.WATER:
             # Encourage smooth swimming by lightly penalizing large joint speeds.
-            reward -= activity_penalty * 0.001  # lighter penalty in water
+            reward -= activity_penalty * 0.0005  # relaxed penalty
 
         else:  # Land
             # On land, *penalize* rather than reward erratic motion.
-            reward -= activity_penalty * 0.001  # lighter penalty on land
+            reward -= activity_penalty * 0.0005  # relaxed penalty
         
         # Penalty for excessive torque to encourage efficiency
         torque_penalty = np.sum(np.square(physics.data.ctrl))
-        reward -= torque_penalty * 0.001
+
+        # Scale penalty by current viscosity so strokes in thick fluid remain economical
+        vis_scale = min(self.current_viscosity / 0.3, 1.0)  # 0..1
+        reward -= torque_penalty * 0.0001 * vis_scale
 
         # Small constant incentive to keep moving (helps exploration).
         reward += 0.01
@@ -250,9 +270,15 @@ if not hasattr(swimmer, 'improved_mixed_env_registered'):
 class ImprovedMixedSwimmerEnv:
     """Wrapper class for the improved mixed environment swimmer."""
     
-    def __init__(self, n_links=6, desired_speed=_SWIM_SPEED, time_limit=3000):
+    def __init__(self, n_links=6, desired_speed=_SWIM_SPEED, time_limit=3000, speed_factor=1.0):
+        # Create base environment
         self.env = suite.load('swimmer', 'improved_mixed_environment', 
                              task_kwargs={'random': 1, 'n_links': n_links})
+        # Accelerate simulation by scaling MuJoCo timestep (bigger timestep = faster simulated time)
+        if speed_factor != 1.0:
+            self.env.physics.model.opt.timestep *= speed_factor
+            # Optionally reduce n_sub_steps to keep stability (unchanged for now)
+        self.speed_factor = speed_factor
         self.physics = self.env.physics
         self.action_spec = self.env.action_spec()
         self.observation_spec = self.env.observation_spec()

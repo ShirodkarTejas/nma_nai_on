@@ -14,11 +14,11 @@ class TonicSwimmerWrapper(gym.Env):
     Gym wrapper for our mixed environment swimmer to make it compatible with Tonic.
     """
     
-    def __init__(self, n_links=6, time_feature=True):
+    def __init__(self, n_links=6, time_feature=True, speed_factor=1.0):
         super().__init__()
         
         # Create the underlying environment
-        self.env = ImprovedMixedSwimmerEnv(n_links=n_links)
+        self.env = ImprovedMixedSwimmerEnv(n_links=n_links, speed_factor=speed_factor)
         
         # Get action space from environment
         action_spec = self.env.action_spec
@@ -33,6 +33,9 @@ class TonicSwimmerWrapper(gym.Env):
         obs_dim = n_links * 2  # positions + velocities
         if time_feature:
             obs_dim += 1  # Add time feature
+
+        # 1 extra for viscosity
+        obs_dim += 1
         
         self.observation_space = spaces.Box(
             low=-np.inf,
@@ -86,7 +89,8 @@ class TonicSwimmerWrapper(gym.Env):
             'observations': [gym_obs],  # List of observations for each worker
             'rewards': np.array([reward], dtype=np.float32),
             'resets': np.array([done], dtype=bool),
-            'terminations': np.array([done], dtype=bool)
+            'terminations': np.array([done], dtype=bool),
+            'viscosity': np.array([self.env.env.task.current_viscosity], dtype=np.float32)
         }
         
         return gym_obs, infos
@@ -97,6 +101,7 @@ class TonicSwimmerWrapper(gym.Env):
             # Extract joint positions and velocities
             joint_pos = obs.get('joints', np.zeros(self.env.action_spec.shape[0]))
             joint_vel = obs.get('joint_velocities', np.zeros(self.env.action_spec.shape[0]))
+            viscosity = obs.get('fluid_viscosity', np.array([0.0001], dtype=np.float32))
         else:
             # Assume obs is joint positions
             joint_pos = obs
@@ -109,6 +114,9 @@ class TonicSwimmerWrapper(gym.Env):
         if self.time_feature:
             time_feature = np.array([self.step_count / self.max_steps], dtype=np.float32)
             gym_obs = np.concatenate([gym_obs, time_feature])
+
+        # Append viscosity
+        gym_obs = np.concatenate([gym_obs, viscosity])
         
         return gym_obs.astype(np.float32)
     

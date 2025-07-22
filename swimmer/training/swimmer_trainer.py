@@ -97,13 +97,13 @@ class SwimmerTrainer:
         return PPOAgent(model)
     
     def create_tonic_ppo_agent(self, model):
-        """Create Tonic PPO agent."""
-        if self.model_type == 'ncap':
-            # Use our custom NCAP model with Custom PPO
-            return CustomPPO(model=model)
-        else:
-            # Use standard MLP model with Custom PPO
-            return CustomPPO(model=model)
+        """Create Tonic-compatible agent for evaluation.
+
+        Training currently uses A2C via CustomA2C; for evaluation we can
+        reuse the same lightweight wrapper instead of the removed CustomPPO.
+        """
+        from .custom_tonic_agent import CustomA2C
+        return CustomA2C(model=model)
     
     def create_agent(self, model):
         """Create agent based on algorithm."""
@@ -375,7 +375,7 @@ class SwimmerTrainer:
             'lengths': total_lengths
         }
     
-    def evaluate_mixed_environment(self, max_frames=1800):
+    def evaluate_mixed_environment(self, max_frames=1800, speed_factor=1.0):
         """Evaluate the trained model in the mixed environment using existing infrastructure."""
         if self.model is None:
             raise ValueError("No model loaded. Train or load a model first.")
@@ -389,7 +389,7 @@ class SwimmerTrainer:
         import time
         
         # Create mixed environment
-        env = ImprovedMixedSwimmerEnv(n_links=self.n_links)
+        env = ImprovedMixedSwimmerEnv(n_links=self.n_links, speed_factor=speed_factor)
         physics = env.physics
         action_spec = env.action_spec
         n_joints = action_spec.shape[0]
@@ -556,7 +556,8 @@ class SwimmerTrainer:
     
     def load_tonic_model(self, model_name):
         """Load a trained Tonic model."""
-        if os.path.isabs(model_name):
+        # Accept absolute path OR already-resolved relative path
+        if os.path.isabs(model_name) or os.path.exists(model_name):
             load_path = model_name
         else:
             load_path = os.path.join(self.output_dir, model_name)

@@ -107,7 +107,7 @@ The script will:
 ### Quick Evaluation of an Existing Model
 ```bash
 # Run just the evaluation / video generation step
-python main.py --mode evaluate --load_model outputs/training/improved_ncap_6links.pt
+python main.py --mode evaluate --load_model outputs/training/improved_ncap_6links.pt  # 4× realtime evaluation
 ```
 
 All other legacy modes (`train`, `train_simple`, `test_mixed`, etc.) are still available, but `train_improved` is the maintained entry-point.
@@ -120,7 +120,14 @@ All other legacy modes (`train`, `train_simple`, `test_mixed`, etc.) are still a
    • Phase B – introduce two land islands at (±3 m, 0 m) with radius 1 m, shrink to 0.6 m over episodes.
 
 2. **Reward Shaping**
-   • Velocity term doubled; activity penalty halved.
+   • Velocity term tripled; target swim speed lowered to 0.15 m s⁻¹; activity & torque penalties ×0.5.
+   • Water viscosity set to 1 × 10⁻⁴ and density left at MuJoCo default (removes extra drag).
+   • NCAP learns amplitude (0.6–1.4×) and oscillator period (0.5–1.5×) from environment context.
+   • Amplitude range widened to 0.2–1.8× and oscillator phase now runs continuously (no reset) for deeper undulations.
+   • Torque penalty now scales with viscosity (×1e-4·visc/0.3) so strokes in low-drag water aren’t punished.
+   • Capsule friction reset to MuJoCo defaults in water; moderate on land.
+   • Viscosity domain-randomisation floor lowered to 1 × 10⁻⁵.
+   • Training logs now automatically save reward-vs-viscosity scatter plot.
    • +0.3 bonus the first time land is reached in each episode.
    • Distance shaping: +0.1 every 0.5 m forward.
 

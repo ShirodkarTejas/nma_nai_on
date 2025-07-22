@@ -153,3 +153,12 @@ nma_neuroai/
 - **Transfer ready**: Model prepared for adaptive locomotion challenges
 
 **Next milestone: Apply this successful forward swimming to adaptive mixed environment locomotion with environment transitions.**
+
+**Key Tweaks 22-Jul-25**
+• Reward velocity weight 3×, target swim speed ↓ 0.15 m/s, penalties ×0.5 for torque & activity
+• Removed custom water/land density overrides; rely on low viscosity (1e-4) for water drag
+• Trainer now records viscosity→reward pairs each interval and saves scatter plot for diagnostics
+• Torque penalty scaled by viscosity; penalty factor halved again (1e-4).
+• Water friction values restored to default; land friction moderate.
+• Oscillator phase no longer resets on period changes; amplitude scaling range expanded.
+• Viscosity curriculum covers 1e-5 … 0.3 (log-uniform).

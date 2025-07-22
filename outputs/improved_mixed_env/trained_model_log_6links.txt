@@ -1,6 +1,6 @@
 
 === SWIMMER EXPERIMENT PARAMETER LOG ===
-Timestamp: 2025-07-22 17:21:11
+Timestamp: 2025-07-22 19:13:13
 Experiment: Improved Mixed Environment Swimmer
 
 === ENVIRONMENT PARAMETERS ===
@@ -35,17 +35,17 @@ NCAP Architecture:
   - Phase Offsets: Linear spacing
 
 === PERFORMANCE METRICS ===
-Total Distance Traveled: 0.2323
-Average Velocity: 0.0580
-Maximum Velocity: 0.1954
-Average Reward: -0.0485
+Total Distance Traveled: 0.2428
+Average Velocity: 0.0238
+Maximum Velocity: 0.0852
+Average Reward: 0.0348
 Environment Transitions: 0
 
 === TRAJECTORY ANALYSIS ===
 
 Trajectory Bounds:
-  - X Range: [-0.2023, 0.0000]
-  - Y Range: [-0.1141, 0.0000]
+  - X Range: [-0.1613, 0.0000]
+  - Y Range: [-0.1815, 0.0000]
   - Total Steps: 1801
 
 Zone Analysis:

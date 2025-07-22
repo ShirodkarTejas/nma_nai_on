@@ -7,6 +7,16 @@ import torch
 from tonic.torch.agents import a2c
 import numpy as np
 
+# ---------------------------------------------------------------
+# Utility: fast conversion from nested lists to Torch tensor.
+# ---------------------------------------------------------------
+
+def _to_tensor(arr, device, dtype=torch.float32):
+    """Convert a possibly list-of-arrays observation batch to torch tensor fast."""
+    if isinstance(arr, list):
+        arr = np.asarray(arr, dtype=np.float32)
+    return torch.as_tensor(arr, dtype=dtype, device=device)
+
 
 class CustomA2C(a2c.A2C):
     """Custom A2C agent that handles device conversion properly."""
@@ -72,11 +82,8 @@ class CustomA2C(a2c.A2C):
     
     def _step(self, observations):
         # Convert observations to tensor and move to the same device as the model
-        observations = torch.as_tensor(observations, dtype=torch.float32)
-        
-        # Get the device of the model
         model_device = next(self.model.parameters()).device
-        observations = observations.to(model_device)
+        observations = _to_tensor(observations, model_device)
         
         with torch.no_grad():
             distributions = self.model.actor(observations)
@@ -90,24 +97,17 @@ class CustomA2C(a2c.A2C):
 
     def _test_step(self, observations):
         # Convert observations to tensor and move to the same device as the model
-        observations = torch.as_tensor(observations, dtype=torch.float32)
-        
-        # Get the device of the model
         model_device = next(self.model.parameters()).device
-        observations = observations.to(model_device)
+        observations = _to_tensor(observations, model_device)
         
         with torch.no_grad():
             return self.model.actor(observations).sample()
 
     def _evaluate(self, observations, next_observations):
         # Convert observations to tensor and move to the same device as the model
-        observations = torch.as_tensor(observations, dtype=torch.float32)
-        next_observations = torch.as_tensor(next_observations, dtype=torch.float32)
-        
-        # Get the device of the model
         model_device = next(self.model.parameters()).device
-        observations = observations.to(model_device)
-        next_observations = next_observations.to(model_device)
+        observations = _to_tensor(observations, model_device)
+        next_observations = _to_tensor(next_observations, model_device)
         
         with torch.no_grad():
             values = self.model.critic(observations)

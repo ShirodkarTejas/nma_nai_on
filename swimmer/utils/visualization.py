@@ -377,3 +377,38 @@ def plot_training_interval_rewards(rewards, save_path):
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
     plt.close() 
+
+
+# --------------------------------------------------------------------------------------
+# New: reward vs viscosity analysis
+# --------------------------------------------------------------------------------------
+
+
+def plot_reward_vs_viscosity(viscosity_list, reward_list, save_path):
+    """Scatter plot showing how reward varies with episode water viscosity.
+
+    Args:
+        viscosity_list (list[float]): viscosity recorded at each step or episode.
+        reward_list (list[float]): corresponding rewards.
+        save_path (str): path to save the png figure.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if len(viscosity_list) == 0:
+        print("[plot_reward_vs_viscosity] Empty data, skipping plot.")
+        return
+
+    viscos = np.array(viscosity_list)
+    rewards = np.array(reward_list)
+
+    plt.figure(figsize=(6, 4))
+    plt.scatter(viscos, rewards, alpha=0.4, s=10, c=np.log10(viscos), cmap='viridis')
+    plt.xscale('log')
+    plt.xlabel('Water viscosity')
+    plt.ylabel('Reward')
+    plt.title('Reward vs Water Viscosity')
+    plt.colorbar(label='log10(viscosity)')
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    plt.close() 
