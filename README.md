@@ -114,6 +114,32 @@ All other legacy modes (`train`, `train_simple`, `test_mixed`, etc.) are still a
 
 ## 🔬 Research Directions
 
+### Roadmap to Improved Locomotion (July 2025)
+1. **Curriculum**
+   • Phase A – train 50 k steps in water‐only (no land islands) to master swimming.
+   • Phase B – introduce two land islands at (±3 m, 0 m) with radius 1 m, shrink to 0.6 m over episodes.
+
+2. **Reward Shaping**
+   • Velocity term doubled; activity penalty halved.
+   • +0.3 bonus the first time land is reached in each episode.
+   • Distance shaping: +0.1 every 0.5 m forward.
+
+3. **Hyper-parameters**
+   • Replay buffer 8 k, 64 batch iterations.
+   • Entropy coefficient 0.05, grad clip 0.5.
+   • Episode length 3 000 steps, early-stopping patience 10 intervals.
+
+4. **Exploration Noise**
+   • Add 0.05 Gaussian torque noise during training.
+
+5. **Long Runs**
+   • Train ≥30 k steps (≈20 min on CUDA) before evaluation.
+
+Use the unified command:
+```bash
+python main.py --mode train_improved --training_steps 30000 --save_steps 10000 --log_episodes 20
+```
+
 ### Current Focus (July 2025)
 1. **Locomotion Efficiency**: Increase forward distance (>1 m) and velocity in mixed water↔land tasks
 2. **Curriculum Learning**: Pre-train in water-only environment then transfer to mixed

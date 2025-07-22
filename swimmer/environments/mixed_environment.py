@@ -37,15 +37,28 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
         # Default environment is now WATER; define a few *land* patches.
         self.water_zones = []  # Everywhere is water unless inside a land zone
         self.land_zones = [
-            {'center': [-2, 0], 'radius': 1.0},   # Left land island
-            {'center': [2, 0], 'radius': 1.0},    # Right land island
+            {'center': [-2.5, 0], 'radius': 1.5},   # Left land island
+            {'center': [2.5, 0], 'radius': 1.5},    # Right land island
         ]
+
+        # Curriculum helpers
+        self._episode_counter = 0  # increments every initialize_episode
         
     def initialize_episode(self, physics):
         super().initialize_episode(physics)
         
         # Default physics is now WATER
         self.apply_environment_physics(physics, EnvironmentType.WATER)
+
+        # -------- Curriculum: gradually shrink land islands --------
+        self._episode_counter += 1
+        shrink_steps = [0, 10, 20]  # episode indices where we shrink radius
+        radii         = [1.0, 0.8, 0.6]
+
+        # Determine appropriate radius based on episode count
+        target_radius = radii[min(len(radii)-1, sum(self._episode_counter >= s for s in shrink_steps)-1)]
+        for zone in self.land_zones:
+            zone['radius'] = target_radius
         
         # Hide target
         physics.named.model.mat_rgba['target', 'a'] = 1
@@ -194,6 +207,17 @@ class ImprovedMixedEnvironmentSwim(swimmer.Swimmer):
 
         # Small constant incentive to keep moving (helps exploration).
         reward += 0.01
+
+        # -------- New bonuses --------
+        # One-time bonus when the swimmer reaches land for the first time in episode
+        if current_env == EnvironmentType.LAND and not getattr(self, '_land_reached', False):
+            self._land_reached = True
+            reward += 0.3  # lower bonus to smooth rewards
+
+        # distance-based shaping every 0.5 m from initial position
+        head_pos = physics.named.data.xpos['head', :2]
+        dist_from_start = np.linalg.norm(head_pos - self._initial_position)
+        reward += 0.1 * (dist_from_start // 0.5)
         
         # Bonus for approaching land patches (if water_zones defined) or vice-versa
         if self.water_zones:

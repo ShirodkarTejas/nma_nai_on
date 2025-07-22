@@ -320,6 +320,15 @@ class NCAPSwimmer(nn.Module):
         # 7. FINAL BOUNDS (ensure output is in [-1, 1] as in proper NCAP)
         final_torques = torch.clamp(final_torques, -1.0, 1.0)
         
+        # Add small exploration noise during training
+        if self.training:
+            final_torques = final_torques + 0.05 * torch.randn_like(final_torques)
+
+        # Final safety check
+        if torch.isnan(final_torques).any():
+            print("WARNING: NaN detected in NCAP output, replacing with zeros")
+            final_torques = torch.zeros_like(final_torques)
+        
         # Store action in memory for adaptation
         if self.include_environment_adaptation:
             self.action_memory.append(final_torques.detach().cpu().numpy().copy())
@@ -330,11 +339,6 @@ class NCAPSwimmer(nn.Module):
         # Handle output dimension
         if squeeze_output:
             final_torques = final_torques.squeeze(0)
-        
-        # Final safety check
-        if torch.isnan(final_torques).any():
-            print("WARNING: NaN detected in NCAP output, replacing with zeros")
-            final_torques = torch.zeros_like(final_torques)
         
         return final_torques
 

@@ -44,7 +44,7 @@ class ImprovedNCAPTrainer(SwimmerTrainer):
         self.stability_check_frequency = 100  # Less frequent checks for faster training
         
         # Early stopping parameters
-        self.early_stopping_patience = 5  # give more time before stopping
+        self.early_stopping_patience = 10  # allow longer learning before stopping
         self.min_improvement_threshold = 0.01  # Minimum improvement to reset patience
         self.early_stopping_metric = 'reward'  # Track reward for improvement
         
@@ -122,19 +122,19 @@ class ImprovedNCAPTrainer(SwimmerTrainer):
         
         # Create updaters optimized for adaptive locomotion
         actor_updater = updaters.StochasticPolicyGradient(
-            optimizer=lambda params: torch.optim.Adam(params, lr=self.ncap_learning_rate),
-            entropy_coeff=0.02,  # Higher entropy for exploration across environments
-            gradient_clip=self.ncap_gradient_clip
+            optimizer=lambda params: torch.optim.Adam(params, lr=3e-4),
+            entropy_coeff=0.05,
+            gradient_clip=0.5
         )
         
         critic_updater = updaters.VRegression(
-            optimizer=lambda params: torch.optim.Adam(params, lr=self.ncap_learning_rate * 2),
-            gradient_clip=self.ncap_gradient_clip
+            optimizer=lambda params: torch.optim.Adam(params, lr=6e-4),
+            gradient_clip=0.5
         )
         
-        # Larger replay buffer for better learning across environments
+        # Larger replay buffer
         from tonic import replays
-        replay = replays.Segment(size=2048, batch_iterations=16)  # Larger buffer for diverse experience
+        replay = replays.Segment(size=8192, batch_iterations=64)
         
         return CustomA2C(
             model=model,
@@ -277,9 +277,20 @@ class ImprovedNCAPTrainer(SwimmerTrainer):
         
         # Print training metrics
         self._print_training_metrics()
+
+        # Plot interval reward progression
+        from ..utils.visualization import plot_training_interval_rewards
+        interval_plot = os.path.join('outputs','training_logs',f'interval_rewards_{self.n_links}links.png')
+        plot_training_interval_rewards(self.training_metrics['interval_rewards'], interval_plot)
+        print(f"Interval reward plot saved to {interval_plot}")
+
+        # --- Automatic mixed-environment evaluation ---
+        print("\nRunning post-training evaluation …")
+        eval_results = self.evaluate_mixed_environment(max_frames=1800)
+        print(f"Distance travelled post-training: {eval_results['total_distance']:.3f} m")
         
         end_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print(f"[{end_ts}] ✔ Improved NCAP training completed!")
+        print(f"[{end_ts}] ✔ Improved NCAP training completed and evaluated!")
     
     def _run_interval_training(self, agent, env, model):
         """Run training in intervals with stability checks and early stopping."""

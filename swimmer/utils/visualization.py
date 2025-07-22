@@ -290,10 +290,38 @@ Parameter Log: {save_path}
     print(f"Parameter log saved as {save_path}")
 
 def add_zone_overlay(frame, task, current_env):
-    """Add visual zone overlay to the rendered frame."""
-    # For now, just return the original frame to avoid overlay issues
-    # The zone visualization will be shown in the plots instead
-    return frame
+    """Overlay land (green) and water (blue) zones on a rendered frame.
+
+    Uses cv2 if available; otherwise returns original frame.
+    """
+    try:
+        import cv2
+        overlay = frame.copy()
+
+        h, w, _ = frame.shape
+        scale = 80  # pixels per world-unit (heuristic for dm_control default camera)
+
+        # Helper to convert world coords to image coords (origin at centre)
+        def to_px(pos):
+            return int(w/2 + pos[0]*scale), int(h/2 - pos[1]*scale)
+
+        # Land zones – semi-transparent green
+        for zone in task.land_zones:
+            cx, cy = to_px(zone['center'])
+            radius = int(zone['radius']*scale)
+            cv2.circle(overlay, (cx, cy), radius, (0, 255, 0), -1)
+
+        # Blend overlay
+        cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame)
+
+        # Outline current environment type around head position
+        head_pos = task.position_history[-1] if hasattr(task, 'position_history') else [0, 0]
+        hx, hy = to_px(head_pos)
+        color = (255,0,0) if current_env == EnvironmentType.WATER else (0,255,0)
+        cv2.circle(frame, (hx, hy), 5, color, -1)
+        return frame
+    except ImportError:
+        return frame
 
 def plot_training_results(log_file, save_path):
     """
@@ -336,3 +364,16 @@ def plot_training_results(log_file, save_path):
         print(f"Log file not found at {log_file}")
     except Exception as e:
         print(f"Could not plot training results: {e}") 
+
+def plot_training_interval_rewards(rewards, save_path):
+    """Plot interval best rewards over training."""
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(6,4))
+    plt.plot(rewards, marker='o')
+    plt.title('Interval Best Reward Progression')
+    plt.xlabel('Interval')
+    plt.ylabel('Best Reward')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close() 

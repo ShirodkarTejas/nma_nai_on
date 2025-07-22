@@ -1,6 +1,6 @@
 
 === SWIMMER EXPERIMENT PARAMETER LOG ===
-Timestamp: 2025-07-22 15:49:00
+Timestamp: 2025-07-22 17:21:11
 Experiment: Improved Mixed Environment Swimmer
 
 === ENVIRONMENT PARAMETERS ===
@@ -12,8 +12,8 @@ Base Amplitude: a2c
 Water Zones:
 
 Land Zones:
-  Zone 1: center=[-2, 0], radius=1.0
-  Zone 2: center=[2, 0], radius=1.0
+  Zone 1: center=[-2.5, 0], radius=1.0
+  Zone 2: center=[2.5, 0], radius=1.0
 
 === PHYSICS PROPERTIES ===
 Water Environment:
@@ -35,17 +35,17 @@ NCAP Architecture:
   - Phase Offsets: Linear spacing
 
 === PERFORMANCE METRICS ===
-Total Distance Traveled: 0.2640
-Average Velocity: 0.0549
-Maximum Velocity: 0.1603
-Average Reward: -0.0687
+Total Distance Traveled: 0.2323
+Average Velocity: 0.0580
+Maximum Velocity: 0.1954
+Average Reward: -0.0485
 Environment Transitions: 0
 
 === TRAJECTORY ANALYSIS ===
 
 Trajectory Bounds:
-  - X Range: [-0.2465, 0.0000]
-  - Y Range: [0.0000, 0.0945]
+  - X Range: [-0.2023, 0.0000]
+  - Y Range: [-0.1141, 0.0000]
   - Total Steps: 1801
 
 Zone Analysis:

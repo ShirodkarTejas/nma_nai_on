@@ -93,9 +93,10 @@ Numerical explosions were eliminated by hard-clamping all NCAP weights each forw
 ## **🚀 Immediate Next Steps**
 
 ### **Priority 1: Distance & Velocity Improvements**
-1. Curriculum pre-training in water-only task
-2. Increase training steps to 50 k, larger replay buffer
-3. Reward shaping fine-tune (_SWIM_SPEED_, activity penalty)
+1. **Curriculum** – water-only pre-training then mixed with shrinking land islands
+2. **Reward shaping** – distance bonus, moderate land-arrival bonus (0.3)
+3. **Hyper-params** – replay 8 k, entropy 0.05, patience 10, 30 k+ steps
+4. **Visual overlay** – zone colours in video enabled (OpenCV)
 
 ### **Priority 2: Adaptive Locomotion**
 1. **Transfer simple model to mixed environment** for adaptation testing
