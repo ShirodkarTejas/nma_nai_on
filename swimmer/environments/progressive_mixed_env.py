@@ -44,10 +44,28 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         self._target_radius = 1.0  # Distance to consider target "reached" (appropriate for 3m swimmer)
         self._target_visit_timer = 0  # Auto-advance targets if swimmer gets stuck
         
+        # Target timeout based on training progress (more time for complex phases)
+        self._target_timeout = self._get_adaptive_target_timeout()
+        
         # Environment transition tracking
         self._last_environment = None
         self._environment_transitions = 0
         
+    def _get_adaptive_target_timeout(self):
+        """Calculate adaptive target timeout based on training progress and target distances."""
+        if self._training_progress < 0.3:
+            # Phase 1: Pure swimming - moderate timeout for 3m targets
+            return 900  # 30 seconds at 30 FPS (3m / 0.15 m/s = 20s + 10s buffer)
+        elif self._training_progress < 0.6:
+            # Phase 2: Single land zone - longer timeout for crawling (5m targets)
+            return 1500  # 50 seconds (5m / 0.1 m/s crawl speed = 50s)
+        elif self._training_progress < 0.8:
+            # Phase 3: Two land zones - even longer for complex navigation
+            return 1800  # 60 seconds for cross-zone navigation
+        else:
+            # Phase 4: Full complexity - maximum timeout for island hopping
+            return 2100  # 70 seconds for complex multi-zone navigation
+    
     def _get_progressive_land_zones(self):
         """Get land zones based on training progress - designed for deep crawling training."""
         if self._training_progress < 0.3:
@@ -405,7 +423,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             
             # Check for target completion (either reached or time limit)
             target_reached = distance_to_target < self._target_radius
-            time_limit_reached = self._target_visit_timer > 300  # Auto-advance after 300 steps (~10 seconds)
+            time_limit_reached = self._target_visit_timer > self._target_timeout  # Adaptive timeout based on phase complexity
             
             if target_reached or time_limit_reached:
                 if target_reached:
@@ -423,7 +441,8 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     if self._targets_reached % 50 == 0:  # Log every 50th auto-advance
                         try:
                             from tqdm import tqdm
-                            tqdm.write(f"⏰ Target {self._targets_reached + 1} auto-advanced after {self._target_visit_timer} steps")
+                            timeout_seconds = self._target_timeout / 30.0  # Convert to seconds (assuming 30 FPS)
+                            tqdm.write(f"⏰ Target {self._targets_reached + 1} auto-advanced after {self._target_visit_timer} steps (timeout: {timeout_seconds:.1f}s)")
                         except ImportError:
                             pass  # Silent if tqdm not available
                 
@@ -478,6 +497,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             
         self._current_land_zones = self._get_progressive_land_zones()
         self._current_targets = self._get_progressive_targets()
+        self._target_timeout = self._get_adaptive_target_timeout()  # Update timeout for new phase
 
 @swimmer.SUITE.add()
 def progressive_swim_crawl(
@@ -555,12 +575,18 @@ class ProgressiveMixedSwimmerEnv:
                 tqdm.write(f"\n🎓 TRAINING PHASE CHANGE: {phase_old} → {phase_new}")
                 tqdm.write(f"   Progress: {old_progress:.2%} → {self.training_progress:.2%}")
                 
+                # Get timeout info for the new phase
+                timeout_values = [900, 1500, 1800, 2100]  # Same as in _get_adaptive_target_timeout
+                new_timeout_seconds = timeout_values[min(phase_new, 3)] / 30.0
+                
                 if phase_new == 1:
                     tqdm.write("   📈 Phase 1: Adding first land zone")
                 elif phase_new == 2:
                     tqdm.write("   📈 Phase 2: Adding second land zone")
                 elif phase_new == 3:
                     tqdm.write("   📈 Phase 3: Full complexity mixed environment")
+                
+                tqdm.write(f"   ⏰ Target timeout increased to {new_timeout_seconds:.1f}s for more complex navigation")
             except ImportError:
                 pass  # Silent if tqdm not available
             
