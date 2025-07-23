@@ -176,14 +176,164 @@ class CurriculumNCAPTrainer:
         
         # Create biological NCAP agent wrapper with environment adaptation
         class BiologicalNCAPAgent:
-            def __init__(self, ncap_model):
+            def __init__(self, ncap_model, environment):
                 self.ncap_model = ncap_model
                 self.step_count = 0
                 self.use_stable_init = True  # Reduce erratic motion for untrained models
                 
+                # Initialize RL training components
+                # Get learning rate from parent trainer
+                learning_rate = 3e-5  # Default learning rate for NCAP training
+                self.optimizer = torch.optim.Adam(ncap_model.parameters(), lr=learning_rate)
+                self.episode_buffer = {'obs': [], 'actions': [], 'rewards': []}
+                self.training_enabled = True
+                
             def step(self, obs):
-                """Training step - returns action."""
-                return self.test_step(obs)
+                """Training step - returns action AND updates model."""
+                action = self.test_step(obs)
+                
+                # Store experience for training (if training enabled)
+                if self.training_enabled and len(self.episode_buffer['obs']) > 0:
+                    # Store previous transition
+                    self.episode_buffer['obs'].append(obs)
+                    self.episode_buffer['actions'].append(action)
+                
+                return action
+            
+            def add_reward(self, reward):
+                """Add reward for the last action."""
+                if self.training_enabled:
+                    self.episode_buffer['rewards'].append(reward)
+            
+            def end_episode(self):
+                """End episode and train on collected experience."""
+                if not self.training_enabled or len(self.episode_buffer['rewards']) < 5:
+                    self._reset_buffer()
+                    return
+                
+                # Simple policy gradient training
+                self._train_on_episode()
+                self._reset_buffer()
+            
+            def _train_on_episode(self):
+                """Train model on episode buffer using policy gradient."""
+                if len(self.episode_buffer['rewards']) == 0:
+                    return
+                
+                try:
+                    device = next(self.ncap_model.parameters()).device
+                    
+                    # Calculate returns (discounted rewards)
+                    returns = []
+                    running_return = 0
+                    for reward in reversed(self.episode_buffer['rewards']):
+                        running_return = reward + 0.99 * running_return
+                        returns.insert(0, running_return)
+                    
+                    if len(returns) == 0:
+                        return
+                    
+                    # Normalize returns
+                    returns = torch.FloatTensor(returns).to(device)
+                    if returns.std() > 1e-6:
+                        returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+                    
+                    # Convert observations and actions to tensors
+                    obs_batch = []
+                    action_batch = []
+                    
+                    for i in range(min(len(self.episode_buffer['obs']), len(self.episode_buffer['actions']))):
+                        obs_batch.append(self.episode_buffer['obs'][i])
+                        action_batch.append(self.episode_buffer['actions'][i])
+                    
+                    if len(obs_batch) == 0:
+                        return
+                    
+                    # Train on mini-batches
+                    batch_size = min(32, len(obs_batch))
+                    for start_idx in range(0, len(obs_batch), batch_size):
+                        end_idx = min(start_idx + batch_size, len(obs_batch))
+                        
+                        batch_obs = obs_batch[start_idx:end_idx]
+                        batch_actions = action_batch[start_idx:end_idx]
+                        batch_returns = returns[start_idx:end_idx]
+                        
+                        if len(batch_obs) < 2:
+                            continue
+                        
+                        # Get model predictions
+                        predicted_actions = []
+                        for obs in batch_obs:
+                            action = self._get_model_action(obs)
+                            predicted_actions.append(action)
+                        
+                        if len(predicted_actions) == 0:
+                            continue
+                        
+                        predicted_actions = torch.stack(predicted_actions)
+                        actual_actions = torch.FloatTensor(batch_actions).to(device)
+                        
+                        # Policy gradient loss
+                        loss = torch.nn.functional.mse_loss(predicted_actions, actual_actions, reduction='none')
+                        policy_loss = (loss.mean(dim=1) * batch_returns[:len(loss)]).mean()
+                        
+                        # Update model
+                        self.optimizer.zero_grad()
+                        policy_loss.backward()
+                        torch.nn.utils.clip_grad_norm_(self.ncap_model.parameters(), 0.5)
+                        self.optimizer.step()
+                        
+                except Exception as e:
+                    print(f"⚠️ Training step failed: {e}")
+            
+            def _reset_buffer(self):
+                """Reset episode buffer."""
+                self.episode_buffer = {'obs': [], 'actions': [], 'rewards': []}
+            
+            def _get_model_action(self, obs):
+                """Get action from NCAP model as tensor for training."""
+                device = next(self.ncap_model.parameters()).device
+                
+                if not isinstance(obs, torch.Tensor):
+                    obs = torch.tensor(obs, dtype=torch.float32, device=device)
+                elif obs.device != device:
+                    obs = obs.to(device)
+                
+                # Extract joint positions and other inputs (same logic as test_step)
+                joint_pos = obs[:4] if len(obs) >= 4 else torch.zeros(4, device=device)
+                
+                # Environment adaptation
+                environment_type = None
+                if len(obs) >= 9:
+                    water_flag = obs[8:9]
+                    land_flag = 1.0 - water_flag
+                    viscosity_norm = torch.zeros_like(water_flag) + 0.1
+                    environment_type = torch.cat([water_flag, land_flag, viscosity_norm])
+                
+                # Goal direction (for enhanced NCAP)
+                target_direction = None
+                if len(obs) >= 32 and hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
+                    target_x, target_y = obs[-4:-3], obs[-3:-2]
+                    swimmer_x, swimmer_y = obs[-2:-1], obs[-1:]
+                    target_direction = torch.cat([target_x - swimmer_x, target_y - swimmer_y])
+                
+                # Get action from model
+                with torch.no_grad():
+                    if hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
+                        action = self.ncap_model(
+                            joint_pos, 
+                            environment_type=environment_type,
+                            target_direction=target_direction,
+                            timesteps=torch.tensor([self.step_count], device=device)
+                        )
+                    else:
+                        action = self.ncap_model(
+                            joint_pos, 
+                            environment_type=environment_type,
+                            timesteps=torch.tensor([self.step_count], device=device)
+                        )
+                
+                return action
             
             def test_step(self, obs):
                 """Test step - returns action without training."""
@@ -244,7 +394,7 @@ class CurriculumNCAPTrainer:
                 
                 return action.cpu().numpy()
         
-        agent = BiologicalNCAPAgent(model)
+        agent = BiologicalNCAPAgent(model, env)
         
         print(f"🧬 Created biological NCAP agent with environment adaptation for curriculum learning")
         
@@ -487,12 +637,19 @@ class CurriculumNCAPTrainer:
             for _ in range(1000):  # Max episode length
                 action = agent.step(obs)
                 obs, reward, done, _ = env.step(action)
+                
+                # CRITICAL: Add reward to agent for training (was missing!)
+                agent.add_reward(reward)
+                
                 episode_reward += reward
                 episode_steps += 1
                 self.current_step += 1
                 
                 if done or self.current_step >= self.training_steps:
                     break
+            
+            # CRITICAL: Train on episode experience (was missing!)
+            agent.end_episode()
             
             # Update progress bar for steps taken this episode
             steps_this_episode = self.current_step - episode_start_step

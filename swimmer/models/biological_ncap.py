@@ -171,7 +171,22 @@ class BiologicalNCAPSwimmer(nn.Module):
         
         if environment_type is not None and self.include_environment_adaptation:
             try:
-                water_flag, land_flag, viscosity_norm = environment_type
+                # FIXED: Handle tensor inputs properly to avoid scalar conversion errors
+                if isinstance(environment_type, torch.Tensor):
+                    # Convert tensor to list for unpacking
+                    env_values = environment_type.detach().cpu().numpy().tolist()
+                    if len(env_values) >= 3:
+                        water_flag, land_flag, viscosity_norm = env_values[:3]
+                    elif len(env_values) == 2:
+                        water_flag, land_flag = env_values[:2]
+                        viscosity_norm = 0.1  # Default viscosity
+                    else:
+                        water_flag = env_values[0]
+                        land_flag = 1.0 - water_flag
+                        viscosity_norm = 0.1  # Default viscosity
+                else:
+                    # Handle list/array inputs
+                    water_flag, land_flag, viscosity_norm = environment_type
                 
                 # **Viscosity-based amplitude scaling** (like changing muscle strength)
                 # Higher viscosity = need more force, like real swimming/crawling
@@ -180,7 +195,15 @@ class BiologicalNCAPSwimmer(nn.Module):
                 
                 # **Environment-specific period modulation** (like changing gait frequency)
                 # Land = slower, more deliberate movements; Water = faster, fluid movements
-                if land_flag > 0.5:  # In land
+                # FIXED: Handle tensor boolean properly
+                if isinstance(land_flag, torch.Tensor):
+                    land_flag_value = float(land_flag.item())
+                elif isinstance(land_flag, (list, tuple)):
+                    land_flag_value = float(land_flag[0])
+                else:
+                    land_flag_value = float(land_flag)
+                
+                if land_flag_value > 0.5:  # In land
                     period_modulation = 1.0 + self.oscillator_sensitivity * 0.5  # Slower on land
                     environment_modulation = self.land_adaptation
                 else:  # In water

@@ -21,8 +21,10 @@ from ..utils.helpers import flatten_observation
 from ..utils.visualization import create_comprehensive_visualization, create_parameter_log, add_zone_overlay
 from .environment_types import EnvironmentType
 
-# Set environment variable for rendering
-os.environ['MUJOCO_GL'] = 'egl'
+# Set environment variable for rendering only if not already set
+# This allows main.py to control the rendering backend
+if 'MUJOCO_GL' not in os.environ:
+    os.environ['MUJOCO_GL'] = 'glfw'  # Windows-compatible rendering
 
 _SWIM_SPEED = 0.15      # lowered target speed to give higher velocity rewards
 _CRAWL_SPEED = 0.08     # slightly higher crawl speed target

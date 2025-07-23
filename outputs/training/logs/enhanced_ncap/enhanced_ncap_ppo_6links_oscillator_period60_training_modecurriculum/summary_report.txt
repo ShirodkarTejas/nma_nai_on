@@ -1,0 +1,26 @@
+
+=== TRAINING SUMMARY REPORT ===
+Experiment: enhanced_ncap_ppo_6links_oscillator_period60_training_modecurriculum
+Duration: 8.11 minutes
+Total Episodes: 0
+Total Training Steps: 1
+
+=== PERFORMANCE METRICS ===
+Rewards:
+  - Average: 0.0000
+  - Maximum: 0.0000
+  - Minimum: 0.0000
+  - Final: 0.0000
+
+Distances:
+  - Average: 0.0000
+  - Maximum: 0.0000
+  - Final: 0.0000
+
+=== CONFIGURATION ===
+
+=== FILES GENERATED ===
+- Configuration: outputs/training/logs\enhanced_ncap\enhanced_ncap_ppo_6links_oscillator_period60_training_modecurriculum\config.json
+- Metrics: outputs/training/logs\enhanced_ncap\enhanced_ncap_ppo_6links_oscillator_period60_training_modecurriculum\metrics.json
+- Episodes: outputs/training/logs\enhanced_ncap\enhanced_ncap_ppo_6links_oscillator_period60_training_modecurriculum\episodes.json
+- Plots: outputs/training/logs\enhanced_ncap\enhanced_ncap_ppo_6links_oscillator_period60_training_modecurriculum\training_plots.png

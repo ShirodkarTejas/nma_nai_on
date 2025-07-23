@@ -96,11 +96,14 @@ class RelaxationOscillator(nn.Module):
             # Rapid fall for dorsal
             self.dorsal_activity = max(0.0, self.dorsal_activity - self.dorsal_fall_rate)
         
-        # Apply proprioceptive threshold switching (prevents getting stuck)
-        if self.dorsal_activity > torch.clamp(self.dorsal_threshold, 0.6, 0.9):
+        # Apply proprioceptive threshold switching (prevents getting stuck) - FIXED: tensor boolean
+        dorsal_threshold_val = float(torch.clamp(self.dorsal_threshold, 0.6, 0.9).item())
+        ventral_threshold_val = float(torch.clamp(self.ventral_threshold, 0.6, 0.9).item())
+        
+        if float(self.dorsal_activity) > dorsal_threshold_val:
             self.ventral_activity = min(1.0, self.ventral_activity + 0.05)  # REDUCED from 0.1
         
-        if self.ventral_activity > torch.clamp(self.ventral_threshold, 0.6, 0.9):
+        if float(self.ventral_activity) > ventral_threshold_val:
             self.dorsal_activity = min(1.0, self.dorsal_activity + 0.05)  # REDUCED from 0.1
         
         # Convert to tensor with proper device handling
@@ -293,9 +296,49 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
         
         if environment_type is not None and self.include_environment_adaptation:
             try:
-                water_flag, land_flag, viscosity_norm = environment_type
+                # Robust unpacking - handle different environment_type formats (FIXED: handle tensors)
+                if isinstance(environment_type, torch.Tensor):
+                    # Convert tensor to numpy array first, then to list for safe unpacking
+                    env_array = environment_type.detach().cpu().numpy()
+                    if env_array.ndim > 1:
+                        env_array = env_array.flatten()  # Flatten if multidimensional
+                    env_values = env_array.tolist()
+                    
+                    if len(env_values) >= 3:
+                        water_flag, land_flag, viscosity_norm = float(env_values[0]), float(env_values[1]), float(env_values[2])
+                    elif len(env_values) == 2:
+                        water_flag, land_flag = float(env_values[0]), float(env_values[1])
+                        viscosity_norm = 0.1  # Default viscosity
+                    else:
+                        water_flag = float(env_values[0]) if env_values else 1.0
+                        land_flag = 1.0 - water_flag
+                        viscosity_norm = 0.1  # Default viscosity
+                        
+                elif hasattr(environment_type, '__len__') and len(environment_type) >= 3:
+                    water_flag, land_flag, viscosity_norm = float(environment_type[0]), float(environment_type[1]), float(environment_type[2])
+                elif hasattr(environment_type, '__len__') and len(environment_type) == 2:
+                    water_flag, land_flag = float(environment_type[0]), float(environment_type[1])
+                    viscosity_norm = 0.1  # Default viscosity
+                elif hasattr(environment_type, '__len__') and len(environment_type) == 1:
+                    # Single value - assume it's water_flag
+                    water_flag = float(environment_type[0])
+                    land_flag = 1.0 - water_flag
+                    viscosity_norm = 0.1  # Default viscosity
+                else:
+                    # Scalar value
+                    water_flag = float(environment_type)
+                    land_flag = 1.0 - water_flag
+                    viscosity_norm = 0.1  # Default viscosity
                 
-                if land_flag > 0.5:  # In land environment
+                # FIXED: Handle tensor boolean properly
+                if isinstance(land_flag, torch.Tensor):
+                    land_flag_value = float(land_flag.item())
+                elif isinstance(land_flag, (list, tuple)):
+                    land_flag_value = float(land_flag[0])
+                else:
+                    land_flag_value = float(land_flag)
+                
+                if land_flag_value > 0.5:  # In land environment
                     frequency_scale = self.land_frequency_scale.item()    # Much slower (0.5x)
                     amplitude_scale = self.land_amplitude_scale.item()    # Reduced amplitude
                     environment_modulation = -0.1  # Inhibitory modulation
@@ -317,8 +360,16 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
         goal_bias = 0.0
         if target_direction is not None and self.include_goal_direction:
             try:
-                # Convert target direction to goal bias for oscillator
-                target_x, target_y = target_direction[:2]
+                # Convert target direction to goal bias for oscillator - FIXED: handle tensors
+                if isinstance(target_direction, torch.Tensor):
+                    target_values = target_direction.detach().cpu().numpy().tolist()
+                    if len(target_values) >= 2:
+                        target_x, target_y = target_values[:2]
+                    else:
+                        target_x = target_values[0] if target_values else 0.0
+                        target_y = 0.0
+                else:
+                    target_x, target_y = target_direction[:2]
                 
                 # FIXED: Much smaller lateral bias to prevent tail-chasing
                 lateral_bias = target_x * self.goal_sensitivity.item() * 0.1  # REDUCED by 10x
@@ -326,7 +377,11 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
                 # Update directional bias with persistence (like working memory)
                 self.directional_bias = (self.directional_bias * (1.0 - self.goal_persistence.item()) + 
                                        lateral_bias * self.goal_persistence.item())
-                goal_bias = torch.clamp(torch.tensor(self.directional_bias), -0.1, 0.1).item()  # REDUCED range
+                # FIXED: Proper tensor construction - avoid torch.tensor() warning
+                if isinstance(self.directional_bias, torch.Tensor):
+                    goal_bias = torch.clamp(self.directional_bias.clone().detach(), -0.1, 0.1).item()
+                else:
+                    goal_bias = max(-0.1, min(0.1, float(self.directional_bias)))
                 
             except Exception as e:
                 goal_bias = 0.0
