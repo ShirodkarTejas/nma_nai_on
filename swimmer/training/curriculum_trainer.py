@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 # Suppress the harmless gym Box precision warning
 warnings.filterwarnings("ignore", message=".*Box bound precision lowered by casting to.*")
-from ..models.simple_ncap import SimpleNCAPSwimmer
+from ..models.biological_ncap import BiologicalNCAPSwimmer, BiologicalNCAPActor
 from ..environments.progressive_mixed_env import TonicProgressiveMixedWrapper
 from ..utils.training_logger import TrainingLogger
 from ..utils.curriculum_visualization import create_curriculum_plots, create_test_video, create_phase_comparison_video, save_training_summary, create_trajectory_analysis
@@ -109,20 +109,22 @@ class CurriculumNCAPTrainer:
         return env
     
     def create_model(self):
-        """Create NCAP model optimized for curriculum learning."""
-        model = SimpleNCAPSwimmer(
+        """Create Biological NCAP model optimized for curriculum learning."""
+        model = BiologicalNCAPSwimmer(
             n_joints=self.n_links - 1,  # 4 joints for 5-link swimmer
-            oscillator_period=self.oscillator_period
+            oscillator_period=self.oscillator_period,
+            include_environment_adaptation=True  # Enable biological adaptation
         ).to(self.device)
         
-        print(f"🧬 Created NCAP model with {sum(p.numel() for p in model.parameters())} parameters")
+        print(f"🧬 Created Biological NCAP model with {sum(p.numel() for p in model.parameters())} parameters")
+        print(f"🔬 Biological adaptation: ENABLED (no LSTM - pure neuromodulation)")
         return model
     
     def create_agent(self, model, env):
         """Create simplified agent for curriculum training."""
         
-        # For testing purposes, create a minimal agent wrapper
-        class SimpleNCAPAgent:
+        # Create biological NCAP agent wrapper with environment adaptation
+        class BiologicalNCAPAgent:
             def __init__(self, ncap_model):
                 self.ncap_model = ncap_model
                 self.step_count = 0
@@ -137,16 +139,26 @@ class CurriculumNCAPTrainer:
                 # Get device from model parameters
                 device = next(self.ncap_model.parameters()).device
                 
-                # Extract joint positions from observation
+                # Extract joint positions and environment info from observation
                 if isinstance(obs, dict):
                     joint_pos = torch.tensor(obs['joints'], dtype=torch.float32, device=device)
+                    # Extract environment information for biological adaptation
+                    environment_type = None
+                    if 'environment_type' in obs and 'fluid_viscosity' in obs:
+                        env_flags = obs['environment_type']  # [water_flag, land_flag]
+                        viscosity = obs['fluid_viscosity'][0] if hasattr(obs['fluid_viscosity'], '__len__') else obs['fluid_viscosity']
+                        # Normalize viscosity for biological model
+                        vis_norm = np.clip((np.log10(viscosity) - np.log10(1e-4)) / (np.log10(1.5) - np.log10(1e-4)), 0.0, 1.0)
+                        environment_type = np.array([env_flags[0], env_flags[1], vis_norm], dtype=np.float32)
                 else:
                     joint_pos = torch.tensor(obs[:4], dtype=torch.float32, device=device)
+                    environment_type = None
                 
-                # Get NCAP action
+                # Get NCAP action with biological adaptation
                 with torch.no_grad():
                     action = self.ncap_model(
                         joint_pos, 
+                        environment_type=environment_type,
                         timesteps=torch.tensor([self.step_count], device=device)
                     )
                     self.step_count += 1
@@ -157,9 +169,9 @@ class CurriculumNCAPTrainer:
                 
                 return action.cpu().numpy()
         
-        agent = SimpleNCAPAgent(model)
+        agent = BiologicalNCAPAgent(model)
         
-        print(f"🤖 Created simplified NCAP agent for curriculum learning")
+        print(f"🧬 Created biological NCAP agent with environment adaptation for curriculum learning")
         
         return agent, model
     

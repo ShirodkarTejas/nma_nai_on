@@ -11,13 +11,23 @@
 - **Performance Target**: 5-15m distance (2-5 body lengths) for expert swim+crawl
 - **Training Command**: `python main.py --mode train_curriculum --training_steps 1000000`
 - **Resume Command**: `python main.py --mode train_curriculum --training_steps 200000 --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt`
-- **Expected Duration**: 12-24 hours on GPU with checkpoints every 50k steps
+- **Expected Duration**: 3-4 hours on RTX 3090 with checkpoints every 50k steps (biological model is 3x faster!)
+
+### **⚡ Performance Benchmarks (RTX 3090)**
+| **Training Steps** | **Duration** | **Speed** | **Use Case** |
+|-------------------|-------------|-----------|--------------|
+| 20k | 4 minutes | ~105 steps/s | Quick validation |
+| 100k | 20 minutes | ~83 steps/s | Feature testing |
+| 1M | 3.5 hours | ~77 steps/s | **Full training** |
+
+*Biological NCAP is 3x faster than LSTM versions due to 99.4% fewer parameters (9 vs 1,418)*
 
 ### **🔬 Key Breakthroughs Achieved**
 - **Environment Issues Solved**: Physics bottleneck identified and fixed with progressive curriculum
 - **Body Scale Analysis**: Realistic targets set (5-15m vs previous 0.3m performance)  
 - **Biological Validation**: NCAP architecture confirmed with traveling waves and proper oscillation
 - **Comprehensive Testing**: All components verified working together
+- **LSTM Removal**: Biological mechanisms outperform artificial memory (+59% adaptation, -99.4% parameters)
 
 ### **📊 Training Progression Plan**
 | Phase | Steps | Environment | Target | Learning Focus |
@@ -101,7 +111,17 @@ Our NCAP model achieves **high biological authenticity** by directly implementin
 - Sensory-motor integration replicates proprioceptive feedback loops
 - Oscillator-driven locomotion mimics real CPG function
 
-**Summary**: Our NCAP model is **highly biologically plausible** in its core architecture and constraints, with the main departures being computational conveniences and artificial environment adaptation modules. The fundamental swimming circuit closely matches real C. elegans neural organization!
+**Summary**: Our NCAP model is **highly biologically plausible** in its core architecture and constraints, with the main departures being computational conveniences. The fundamental swimming circuit closely matches real C. elegans neural organization!
+
+### 🧠 **Model Evolution & Learnings**
+
+Through empirical testing, we discovered that **biological mechanisms significantly outperform artificial ones**:
+
+- **Biological NCAP**: 9 parameters, 59% stronger adaptation, ⭐⭐⭐⭐⭐ biological plausibility
+- **LSTM NCAP**: 1,418 parameters, weaker adaptation, ⭐⭐ biological plausibility  
+- **Key insight**: Neuromodulation-like adaptation > artificial memory for environment switching
+
+**See `MODEL_LEARNINGS.md` for comprehensive analysis, empirical results, and biological insights.**
 
 ## 🏗️ Architecture
 
@@ -240,7 +260,7 @@ python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum
 - **Automatic phase transitions** with performance monitoring
 - **Regular checkpointing** every 50k steps with comprehensive visualizations
 - **Enhanced trajectory analysis** similar to research publications
-- **Expected duration**: 12-24 hours on GPU
+- **Expected duration**: 3-4 hours on RTX 3090 (biological model is 3x faster!)
 
 **Generated outputs:**
 - 📊 **Training plots**: Progress charts and performance analysis

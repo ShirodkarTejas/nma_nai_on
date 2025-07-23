@@ -243,11 +243,11 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
         zone_color = (0, 255, 255) if current_zone_type == "Water" else (0, 165, 255)  # Cyan for water, orange for land
         zone_text_color = (0, 0, 0) if current_zone_type == "Water" else (255, 255, 255)  # Black text on cyan, white on orange
         
-        # Large zone indicator (top-right corner, below step counter)
+        # Large zone indicator (top-right corner, below minimap)
         zone_box_width = 180
         zone_box_height = 45
         zone_x = width - zone_box_width - 15
-        zone_y = 70  # Below step counter and minimap
+        zone_y = 140  # Below minimap (120px + 10px margin + 10px gap = 140px)
         
         # Draw zone indicator box with bright border
         cv2.rectangle(frame_with_zones, (zone_x, zone_y), (zone_x + zone_box_width, zone_y + zone_box_height), zone_color, -1)
@@ -261,11 +261,11 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
         cv2.putText(frame_with_zones, zone_display_text, (text_x, text_y), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, zone_text_color, 2)
         
-        # Add step counter (positioned to avoid minimap collision)
+        # Add step counter (positioned to avoid collisions)
         step_text = f"Step: {step_count}"
         if show_minimap and len(land_zones) > 0:
-            # Place step counter below minimap when minimap is shown (minimap is 120px + 10px margin = 130px from top)
-            cv2.putText(frame_with_zones, step_text, (width-150, 150), 
+            # Place step counter below zone indicator when both minimap and zones are shown
+            cv2.putText(frame_with_zones, step_text, (width-150, 200), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         else:
             # Original position when no minimap
