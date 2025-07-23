@@ -272,11 +272,27 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
             cv2.putText(frame_with_zones, step_text, (width-150, 25), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
-        # Add swimmer position indicator (bright circle at swimmer location)
+        # Add swimmer position indicator with body representation (bright circle at swimmer location)
         try:
             if hasattr(env, 'env') and hasattr(env.env, 'env'):
                 physics = env.env.env.physics
                 swimmer_pos = physics.named.data.xpos['head'][:2]
+                
+                # Get swimmer body orientation for better visualization
+                try:
+                    # Get all body segment positions to show swimmer length
+                    body_positions = []
+                    for i in range(min(5, env.n_links + 1)):  # Head + joints
+                        try:
+                            if i == 0:
+                                pos = physics.named.data.xpos['head'][:2]
+                            else:
+                                pos = physics.named.data.xpos[f'torso_{i}'][:2]
+                            body_positions.append(pos)
+                        except:
+                            break
+                except:
+                    body_positions = [swimmer_pos]  # Fallback to head only
                 
                 # Convert swimmer position to screen coordinates
                 x_range = 12.0  # -6 to 6 
@@ -286,15 +302,31 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
                 swimmer_screen_y = int(height - (swimmer_pos[1] + 4.0) / y_range * height)  # Flip Y for screen coords
                 
                 if 0 <= swimmer_screen_x < width and 0 <= swimmer_screen_y < height:
-                    # Draw bright indicator around swimmer - MUCH more visible
-                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 25, (0, 255, 255), 4)  # Larger cyan circle
-                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 12, (255, 255, 255), -1)  # Larger white center
-                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 12, (0, 0, 0), 2)  # Black border for contrast
-                    cv2.putText(frame_with_zones, "SWIMMER", (swimmer_screen_x-35, swimmer_screen_y-30), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                    # Add arrow pointing to swimmer for extra visibility
-                    cv2.arrowedLine(frame_with_zones, (swimmer_screen_x-50, swimmer_screen_y-50), 
-                                   (swimmer_screen_x-15, swimmer_screen_y-15), (255, 255, 0), 3, tipLength=0.3)
+                    # Draw swimmer body segments to show actual size (~3m long)
+                    if len(body_positions) > 1:
+                        for i in range(len(body_positions) - 1):
+                            start_pos = body_positions[i]
+                            end_pos = body_positions[i + 1]
+                            
+                            start_screen_x = int((start_pos[0] + 6.0) / x_range * width)
+                            start_screen_y = int(height - (start_pos[1] + 4.0) / y_range * height)
+                            end_screen_x = int((end_pos[0] + 6.0) / x_range * width)
+                            end_screen_y = int(height - (end_pos[1] + 4.0) / y_range * height)
+                            
+                            # Draw body segment as thick line
+                            cv2.line(frame_with_zones, (start_screen_x, start_screen_y), 
+                                   (end_screen_x, end_screen_y), (0, 255, 255), 8)  # Thick cyan body
+                            
+                            # Draw joint circles
+                            cv2.circle(frame_with_zones, (start_screen_x, start_screen_y), 6, (255, 255, 255), -1)
+                            cv2.circle(frame_with_zones, (start_screen_x, start_screen_y), 6, (0, 0, 0), 1)
+                    
+                    # Draw bright head indicator 
+                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 15, (0, 255, 255), 4)  # Cyan circle
+                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 8, (255, 255, 255), -1)  # White center
+                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 8, (0, 0, 0), 2)  # Black border
+                    cv2.putText(frame_with_zones, "HEAD", (swimmer_screen_x-20, swimmer_screen_y-25), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 2)
         except Exception as e:
             print(f"⚠️ Swimmer position indicator error: {e}")
         
@@ -332,21 +364,33 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
                 
                 if 0 <= target_screen_x < width and 0 <= target_screen_y < height:
                     if i == current_target_index:
-                        # Current target - bright and pulsing
+                        # Current target - bright and pulsing with visible radius
                         pulse_intensity = int(127 + 128 * abs(np.sin(step_count * 0.3)))
                         if target_type == 'swim':
                             color = (0, pulse_intensity, 255)  # Bright blue for swim targets
                         else:
                             color = (0, pulse_intensity, 0)    # Bright green for land targets
                         
-                        # Draw target with border
+                        # Draw target radius (1.5m) to show scale
+                        target_radius_pixels = int(1.5 / 12.0 * width)  # 1.5m target radius
+                        cv2.circle(frame_with_zones, (target_screen_x, target_screen_y), target_radius_pixels, 
+                                  color, 2)  # Show the actual target area
+                        cv2.circle(frame_with_zones, (target_screen_x, target_screen_y), target_radius_pixels, 
+                                  (255, 255, 255), 1)  # White border for visibility
+                        
+                        # Draw target center
                         cv2.circle(frame_with_zones, (target_screen_x, target_screen_y), 15, color, -1)
                         cv2.circle(frame_with_zones, (target_screen_x, target_screen_y), 15, (255, 255, 255), 2)
                         
-                        # Add target number
+                        # Add target number and distance info
                         cv2.putText(frame_with_zones, str(i+1), 
                                   (target_screen_x-6, target_screen_y+6), 
                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                        
+                        # Add radius label
+                        cv2.putText(frame_with_zones, "1.5m radius", 
+                                  (target_screen_x-40, target_screen_y+35), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
                     elif i < current_target_index:
                         # Completed target - dimmed
                         if target_type == 'swim':
