@@ -1,9 +1,9 @@
 
 === TRAINING SUMMARY REPORT ===
 Experiment: enhanced_ncap_ppo_5links_oscillator_period60_training_modecurriculum
-Duration: 11.27 minutes
+Duration: 27.06 minutes
 Total Episodes: 0
-Total Training Steps: 4
+Total Training Steps: 20
 
 === PERFORMANCE METRICS ===
 Rewards:
@@ -29,8 +29,8 @@ Distances:
 === ADVANCED METRICS ===
 
 Hardware Utilization:
-  - Peak CPU: 60.2%
-  - Peak Memory: 40.9%
+  - Peak CPU: 55.2%
+  - Peak Memory: 42.3%
   - Total Disk Used: 816.8 GB
 
 Training Health:
@@ -39,12 +39,12 @@ Training Health:
   - Parameter Change Rate: 0.0000
 
 Performance Analysis:
-  - Average Steps/Sec: 0.0
-  - Performance Stability: 0.0
+  - Average Steps/Sec: 71.7
+  - Performance Stability: 4.0
 
 ETA Accuracy:
-  - ETA Predictions Made: 4
-  - Final ETA: 2025-07-23T18:35:05.261344
+  - ETA Predictions Made: 10
+  - Final ETA: 2025-07-23T19:14:48.219329
 
 === RECOMMENDATIONS ===
 - Consider increasing learning rate (very small gradients)
