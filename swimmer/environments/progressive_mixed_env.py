@@ -41,7 +41,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         # Goal tracking
         self._current_target_index = 0
         self._targets_reached = 0
-        self._target_radius = 1.0  # Distance to consider target "reached" (appropriate for 3m swimmer)
+        self._target_radius = 1.5  # Distance to consider target "reached" (larger radius for easier completion)
         self._target_visit_timer = 0  # Auto-advance targets if swimmer gets stuck
         
         # Target timeout based on training progress (more time for complex phases)
@@ -54,8 +54,8 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
     def _get_adaptive_target_timeout(self):
         """Calculate adaptive target timeout based on training progress and target distances."""
         if self._training_progress < 0.3:
-            # Phase 1: Pure swimming - moderate timeout for 3m targets
-            return 900  # 30 seconds at 30 FPS (3m / 0.15 m/s = 20s + 10s buffer)
+            # Phase 1: Pure swimming - extended timeout for learning swimmers
+            return 1200  # 40 seconds at 30 FPS (more time for early learning)
         elif self._training_progress < 0.6:
             # Phase 2: Single land zone - longer timeout for crawling (5m targets)
             return 1500  # 50 seconds (5m / 0.1 m/s crawl speed = 50s)
@@ -92,12 +92,12 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
     def _get_progressive_targets(self):
         """Get navigation targets designed for comprehensive swim/crawl/transition training."""
         if self._training_progress < 0.3:
-            # Phase 1: Pure swimming mastery
+            # Phase 1: Pure swimming mastery - Moderate distances for 5-link swimmer
             return [
-                {'position': [1.5, 0], 'type': 'swim'},     # Forward swimming
-                {'position': [3.0, 0], 'type': 'swim'},     # Extended swimming 
-                {'position': [1.5, 1.0], 'type': 'swim'},   # Lateral movement
-                {'position': [1.5, -1.0], 'type': 'swim'}   # Return path
+                {'position': [1.5, 0], 'type': 'swim'},     # Forward swimming (reachable)
+                {'position': [2.5, 0], 'type': 'swim'},     # Extended forward swimming (challenging but doable)
+                {'position': [1.5, 1.2], 'type': 'swim'},   # Lateral movement (diagonal ~1.9m)
+                {'position': [1.5, -1.2], 'type': 'swim'}   # Return path (diagonal ~1.9m)
             ]
         elif self._training_progress < 0.6:
             # Phase 2: Deep land crawling training (land zone: center=[3.0, 0], radius=1.8)
@@ -414,6 +414,24 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             # Distance to target
             distance_to_target = np.linalg.norm(head_pos - target_pos)
             
+            # Track swimming performance for debugging (every 300 steps = 10 seconds)
+            if self._target_visit_timer > 0 and self._target_visit_timer % 300 == 0:
+                if not hasattr(self, '_initial_target_distance'):
+                    self._initial_target_distance = distance_to_target
+                
+                if hasattr(self, '_initial_target_distance'):
+                    distance_traveled = max(0, self._initial_target_distance - distance_to_target)
+                    time_elapsed = self._target_visit_timer / 30.0  # Convert to seconds
+                    actual_speed = distance_traveled / time_elapsed if time_elapsed > 0 else 0
+                    
+                    # Only log occasionally to reduce spam during training
+                    if self._targets_reached % 100 == 0:  # Log every 100th target for debugging
+                        try:
+                            from tqdm import tqdm
+                            tqdm.write(f"🏊 Swimming analysis: {distance_traveled:.2f}m in {time_elapsed:.1f}s = {actual_speed:.3f}m/s (target: 0.15m/s)")
+                        except ImportError:
+                            pass
+            
             # Strong reward for approaching target (inverse distance)
             approach_reward = 1.0 / (1.0 + distance_to_target)
             navigation_reward += approach_reward * 0.5
@@ -449,7 +467,11 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 # Move to next target
                 self._current_target_index += 1
                 self._targets_reached += 1
-                self._target_visit_timer = 0  # Reset timer
+                self._target_visit_timer = 0
+                
+                # Reset distance tracking for new target
+                if hasattr(self, '_initial_target_distance'):
+                    delattr(self, '_initial_target_distance')
                 
                 # Only log phase completion, not every target transition
                 if self._current_target_index >= len(self._current_targets):
@@ -576,7 +598,7 @@ class ProgressiveMixedSwimmerEnv:
                 tqdm.write(f"   Progress: {old_progress:.2%} → {self.training_progress:.2%}")
                 
                 # Get timeout info for the new phase
-                timeout_values = [900, 1500, 1800, 2100]  # Same as in _get_adaptive_target_timeout
+                timeout_values = [1200, 1500, 1800, 2100]  # Same as in _get_adaptive_target_timeout
                 new_timeout_seconds = timeout_values[min(phase_new, 3)] / 30.0
                 
                 if phase_new == 1:
