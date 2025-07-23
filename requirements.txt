@@ -32,4 +32,5 @@ ipykernel
 
 # Additional utilities
 tqdm
-scipy 
+scipy
+psutil 

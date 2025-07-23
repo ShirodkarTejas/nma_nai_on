@@ -9,8 +9,8 @@ from swimmer.training import ImprovedNCAPTrainer
 
 def main():
     parser = argparse.ArgumentParser(description='Improved Mixed Environment Swimmer')
-    parser.add_argument('--mode', choices=['train_improved', 'evaluate'], default='train_improved',
-                       help='Mode to run: train_improved (stable NCAP), or evaluate')
+    parser.add_argument('--mode', choices=['train_improved', 'train_biological', 'train_curriculum', 'evaluate'], default='train_improved',
+                       help='Mode to run: train_improved (stable NCAP), train_biological (preserve biology), train_curriculum (progressive swim+crawl), or evaluate')
     parser.add_argument('--model', choices=['ncap', 'mlp'], default='ncap',
                        help='Model type to use')
     parser.add_argument('--algorithm', choices=['ppo', 'a2c'], default='ppo',
@@ -32,6 +32,26 @@ def main():
     if args.mode == 'train_improved':
         trainer = ImprovedNCAPTrainer(
             n_links=args.n_links,
+            training_steps=args.training_steps,
+            save_steps=args.save_steps,
+            log_episodes=args.log_episodes
+        )
+        trainer.train()
+    elif args.mode == 'train_biological':
+        from swimmer.training.simple_biological_trainer import SimpleBiologicalTrainer
+        trainer = SimpleBiologicalTrainer(
+            n_links=args.n_links,
+            training_steps=args.training_steps,
+            save_steps=args.save_steps,
+            log_episodes=args.log_episodes
+        )
+        trainer.train()
+    elif args.mode == 'train_curriculum':
+        print("🎓 Starting curriculum training for swimming and crawling...")
+        from swimmer.training.curriculum_trainer import CurriculumNCAPTrainer
+        trainer = CurriculumNCAPTrainer(
+            n_links=args.n_links,
+            learning_rate=3e-5,  # Conservative learning rate for long training
             training_steps=args.training_steps,
             save_steps=args.save_steps,
             log_episodes=args.log_episodes
