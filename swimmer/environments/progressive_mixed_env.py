@@ -24,7 +24,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                  desired_speed=_SWIM_SPEED,
                  land_zones=None,
                  water_viscosity=0.001,
-                 land_viscosity=1.0,
+                 land_viscosity=1.5,  # Higher resistance to encourage crawling motion
                  training_progress=0.0,  # 0.0 = pure swimming, 1.0 = full mixed
                  **kwargs):
         super().__init__(**kwargs)
@@ -41,62 +41,83 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         # Goal tracking
         self._current_target_index = 0
         self._targets_reached = 0
-        self._target_radius = 2.0  # Distance to consider target "reached" (larger for untrained swimmers)
+        self._target_radius = 1.0  # Distance to consider target "reached" (appropriate for 3m swimmer)
         self._target_visit_timer = 0  # Auto-advance targets if swimmer gets stuck
         
+        # Environment transition tracking
+        self._last_environment = None
+        self._environment_transitions = 0
+        
     def _get_progressive_land_zones(self):
-        """Get land zones based on training progress."""
+        """Get land zones based on training progress - designed for deep crawling training."""
         if self._training_progress < 0.3:
             # Phase 1: Pure swimming (0-30% of training)
             return []
         elif self._training_progress < 0.6:
-            # Phase 2: Single small land zone (30-60% of training)
-            return [{'center': [3.0, 0], 'radius': 0.8}]
+            # Phase 2: Single large land zone for crawling practice (30-60% of training)
+            return [{'center': [3.0, 0], 'radius': 1.8}]  # Large enough for real crawling
         elif self._training_progress < 0.8:
-            # Phase 3: Two land zones (60-80% of training)
+            # Phase 3: Two overlapping land zones requiring traversal (60-80% of training)
             return [
-                {'center': [-2.0, 0], 'radius': 0.8},
-                {'center': [3.0, 0], 'radius': 0.8}
+                {'center': [-2.0, 0], 'radius': 1.5},  # Left zone - larger for crawling
+                {'center': [3.5, 0], 'radius': 1.5}   # Right zone - forces water crossing
             ]
         else:
-            # Phase 4: Full complexity (80-100% of training)
+            # Phase 4: Complex land configuration requiring mixed locomotion (80-100% of training)
             return self._land_zones if self._land_zones else [
-                {'center': [-2.5, 0], 'radius': 1.0},
-                {'center': [2.5, 0], 'radius': 1.0}
+                {'center': [-3.0, 0], 'radius': 1.2},   # Left land island
+                {'center': [0.0, 2.0], 'radius': 1.0},  # North land island  
+                {'center': [3.0, 0], 'radius': 1.2},    # Right land island
+                {'center': [0.0, -2.0], 'radius': 1.0}  # South land island
             ]
     
     def _get_progressive_targets(self):
-        """Get navigation targets based on training progress."""
+        """Get navigation targets designed for comprehensive swim/crawl/transition training."""
         if self._training_progress < 0.3:
-            # Phase 1: Simple forward movement targets
+            # Phase 1: Pure swimming mastery
             return [
-                {'position': [2.0, 0], 'type': 'swim'},
-                {'position': [4.0, 0], 'type': 'swim'},
-                {'position': [6.0, 0], 'type': 'swim'}
+                {'position': [1.5, 0], 'type': 'swim'},     # Forward swimming
+                {'position': [3.0, 0], 'type': 'swim'},     # Extended swimming 
+                {'position': [1.5, 1.0], 'type': 'swim'},   # Lateral movement
+                {'position': [1.5, -1.0], 'type': 'swim'}   # Return path
             ]
         elif self._training_progress < 0.6:
-            # Phase 2: Navigate to and around single land zone
+            # Phase 2: Deep land crawling training (land zone: center=[3.0, 0], radius=1.8)
             return [
-                {'position': [1.5, 0], 'type': 'swim'},    # Approach land zone
-                {'position': [3.0, 0], 'type': 'land'},    # Enter land zone
-                {'position': [4.5, 0], 'type': 'swim'}     # Exit land zone
+                {'position': [1.5, 0], 'type': 'swim'},     # Approach in water
+                {'position': [2.5, 0], 'type': 'land'},     # Enter land zone (edge)
+                {'position': [3.5, 0], 'type': 'land'},     # Deep in land (requires crawling)
+                {'position': [3.0, 0.8], 'type': 'land'},   # Crawl within land (north side)
+                {'position': [3.0, -0.8], 'type': 'land'},  # Crawl within land (south side) 
+                {'position': [4.0, 0], 'type': 'land'},     # Far edge of land
+                {'position': [5.0, 0], 'type': 'swim'}      # Exit to water
             ]
         elif self._training_progress < 0.8:
-            # Phase 3: Navigate between two land zones
+            # Phase 3: Cross-land traversal and zone switching (two zones: [-2.0,0] & [3.5,0])
             return [
-                {'position': [-2.0, 0], 'type': 'land'},   # First land zone
-                {'position': [0.0, 0], 'type': 'swim'},    # Middle water
-                {'position': [3.0, 0], 'type': 'land'},    # Second land zone
-                {'position': [5.0, 0], 'type': 'swim'}     # Beyond zones
+                {'position': [-1.0, 0], 'type': 'land'},    # Enter left land zone
+                {'position': [-2.5, 0], 'type': 'land'},    # Deep in left land (requires crawling)
+                {'position': [-1.5, 0.8], 'type': 'land'},  # North edge of left land
+                {'position': [0.5, 0], 'type': 'swim'},     # Cross water between zones
+                {'position': [2.8, 0], 'type': 'land'},     # Enter right land zone
+                {'position': [4.2, 0], 'type': 'land'},     # Deep in right land (requires crawling)
+                {'position': [3.5, -1.0], 'type': 'land'},  # South edge of right land
+                {'position': [5.5, 0], 'type': 'swim'}      # Final water target
             ]
         else:
-            # Phase 4: Complex navigation pattern
+            # Phase 4: Complex island hopping requiring all three skills
             return [
-                {'position': [-2.5, 0], 'type': 'land'},   # Left land
-                {'position': [0.0, 1.0], 'type': 'swim'},  # North water
-                {'position': [2.5, 0], 'type': 'land'},    # Right land
-                {'position': [0.0, -1.0], 'type': 'swim'}, # South water
-                {'position': [4.0, 0], 'type': 'swim'}     # Final target
+                {'position': [-2.5, 0], 'type': 'land'},    # Left island deep
+                {'position': [-3.5, 0.5], 'type': 'land'},  # Left island edge
+                {'position': [-1.0, 1.5], 'type': 'swim'},  # Swim to north island
+                {'position': [0.0, 2.8], 'type': 'land'},   # North island deep
+                {'position': [0.8, 2.0], 'type': 'land'},   # North island edge
+                {'position': [2.0, 1.0], 'type': 'swim'},   # Swim to right island
+                {'position': [3.8, 0], 'type': 'land'},     # Right island deep
+                {'position': [3.0, -0.8], 'type': 'land'},  # Right island edge
+                {'position': [1.0, -1.5], 'type': 'swim'},  # Swim to south island
+                {'position': [0.0, -2.5], 'type': 'land'},  # South island deep
+                {'position': [0.0, 0], 'type': 'swim'}      # Return to center
             ]
 
     def initialize_episode(self, physics):
@@ -111,8 +132,86 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         self._targets_reached = 0
         self._target_visit_timer = 0
         
+        # Set progressive starting positions for comprehensive training
+        self._set_progressive_starting_position(physics)
+        
         # Set progressive environment properties
         self._update_environment_physics(physics)
+
+    def _set_progressive_starting_position(self, physics):
+        """Set starting position based on training progress to ensure comprehensive training."""
+        # Get random seed for consistent behavior
+        import random
+        
+        if self._training_progress < 0.3:
+            # Phase 1: Always start in water (default position [0,0])
+            pass  # Keep default water starting position
+            
+        elif self._training_progress < 0.6:
+            # Phase 2: 30% chance to start on land zone (center=[3.0, 0], radius=1.8)
+            if random.random() < 0.3:
+                # Start somewhere within the land zone for crawling practice
+                angle = random.uniform(0, 2 * np.pi)
+                radius = random.uniform(0, 1.2)  # Within land zone but not at edge
+                start_x = 3.0 + radius * np.cos(angle)
+                start_y = 0.0 + radius * np.sin(angle)
+                
+                # Set swimmer position (approximately - MuJoCo controls this)
+                try:
+                    physics.named.data.qpos['root'][0] = start_x
+                    physics.named.data.qpos['root'][1] = start_y
+                except:
+                    pass  # If position setting fails, continue with default
+                    
+        elif self._training_progress < 0.8:
+            # Phase 3: 50% chance to start on one of the land zones
+            if random.random() < 0.5:
+                # Choose random land zone: left [-2.0, 0] or right [3.5, 0]
+                if random.random() < 0.5:
+                    # Start on left land zone
+                    center_x, center_y = -2.0, 0.0
+                    max_radius = 1.2
+                else:
+                    # Start on right land zone  
+                    center_x, center_y = 3.5, 0.0
+                    max_radius = 1.2
+                    
+                # Random position within chosen land zone
+                angle = random.uniform(0, 2 * np.pi)
+                radius = random.uniform(0, max_radius)
+                start_x = center_x + radius * np.cos(angle)
+                start_y = center_y + radius * np.sin(angle)
+                
+                try:
+                    physics.named.data.qpos['root'][0] = start_x
+                    physics.named.data.qpos['root'][1] = start_y
+                except:
+                    pass
+                    
+        else:
+            # Phase 4: 60% chance to start on one of the four land islands
+            if random.random() < 0.6:
+                # Choose random island from four options
+                islands = [
+                    (-3.0, 0, 1.0),      # Left island
+                    (0.0, 2.0, 0.8),     # North island
+                    (3.0, 0, 1.0),       # Right island  
+                    (0.0, -2.0, 0.8)     # South island
+                ]
+                
+                center_x, center_y, max_radius = random.choice(islands)
+                
+                # Random position within chosen island
+                angle = random.uniform(0, 2 * np.pi)
+                radius = random.uniform(0, max_radius * 0.8)  # Stay well within island
+                start_x = center_x + radius * np.cos(angle)
+                start_y = center_y + radius * np.sin(angle)
+                
+                try:
+                    physics.named.data.qpos['root'][0] = start_x
+                    physics.named.data.qpos['root'][1] = start_y
+                except:
+                    pass
 
     def _update_environment_physics(self, physics):
         """Update physics based on current training progress."""
@@ -151,6 +250,29 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     in_land = True
                     current_viscosity = self._land_viscosity
                     break
+            
+            # **FIX: Apply physics changes dynamically based on current zone**
+            current_environment = 'land' if in_land else 'water'
+            
+            if in_land:
+                # Land physics: high viscosity (forces crawling movement)
+                physics.model.opt.viscosity = self._land_viscosity
+            else:
+                # Water physics: low viscosity (allows fluid swimming)
+                physics.model.opt.viscosity = self._water_viscosity
+            
+            # Detect environment transitions for gait analysis
+            if self._last_environment is not None and self._last_environment != current_environment:
+                self._environment_transitions += 1
+                if self._environment_transitions <= 5:  # Log first few transitions to avoid spam
+                    try:
+                        from tqdm import tqdm
+                        tqdm.write(f"🔄 Environment transition {self._environment_transitions}: {self._last_environment} → {current_environment}")
+                        tqdm.write(f"   Viscosity: {physics.model.opt.viscosity:.3f} (forces {'crawling' if in_land else 'swimming'} gait)")
+                    except ImportError:
+                        pass  # Silent if tqdm not available
+            
+            self._last_environment = current_environment
             
             obs['fluid_viscosity'] = np.array([current_viscosity], dtype=np.float32)
             obs['environment_type'] = np.array([1.0 if in_water else 0.0, 1.0 if in_land else 0.0], dtype=np.float32)
@@ -208,26 +330,41 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     break
             
             if in_land:
-                # Land reward: encourage crawling motion
-                joint_activity = np.sum(np.abs(physics.joints()))
+                # Enhanced land reward: encourage efficient crawling motion
+                joint_velocities = physics.data.qvel
+                joint_activity = np.sum(np.abs(joint_velocities))
+                
+                # Movement reward - slower target speed on land but still encourage progress
                 movement_reward = rewards.tolerance(
                     forward_velocity,
-                    bounds=(self._desired_speed * 0.3, float('inf')),  # Lower speed target on land
-                    margin=self._desired_speed * 0.3,
+                    bounds=(self._desired_speed * 0.4, float('inf')),  # Slightly higher land speed target
+                    margin=self._desired_speed * 0.4,
                     value_at_margin=0.,
                     sigmoid='linear',
                 )
+                
+                # Crawling activity reward - encourage coordinated joint movement
                 activity_reward = rewards.tolerance(
                     joint_activity,
-                    bounds=(0.1, float('inf')),
-                    margin=0.1,
+                    bounds=(0.15, float('inf')),  # Encourage active crawling
+                    margin=0.15,
                     value_at_margin=0.,
                     sigmoid='linear',
-                ) * 0.3
+                ) * 0.4
                 
-                base_reward = movement_reward + activity_reward
+                # Efficiency reward - penalize excessive thrashing 
+                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.001
+                
+                # Land persistence bonus - small reward for staying on land when target is land
+                persistence_bonus = 0.0
+                if self._current_targets and self._current_target_index < len(self._current_targets):
+                    current_target = self._current_targets[self._current_target_index]
+                    if current_target['type'] == 'land':
+                        persistence_bonus = 0.05  # Small bonus for being in correct environment
+                
+                base_reward = movement_reward + activity_reward + efficiency_penalty + persistence_bonus
             else:
-                # Water reward: swimming
+                # Enhanced water reward: encourage efficient swimming
                 base_reward = rewards.tolerance(
                     forward_velocity,
                     bounds=(self._desired_speed, float('inf')),
@@ -235,6 +372,19 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     value_at_margin=0.,
                     sigmoid='linear',
                 )
+                
+                # Water persistence bonus - small reward for staying in water when target is swim
+                persistence_bonus = 0.0
+                if self._current_targets and self._current_target_index < len(self._current_targets):
+                    current_target = self._current_targets[self._current_target_index]
+                    if current_target['type'] == 'swim':
+                        persistence_bonus = 0.03  # Small bonus for being in correct environment
+                
+                # Swimming efficiency - small penalty for excessive joint activity in water
+                joint_velocities = physics.data.qvel
+                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.0005
+                
+                base_reward = base_reward + persistence_bonus + efficiency_penalty
         
         # Goal-directed navigation reward
         navigation_reward = 0.0
@@ -260,14 +410,22 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             if target_reached or time_limit_reached:
                 if target_reached:
                     navigation_reward += 2.0  # Large bonus for actually reaching target
-                    # Only log occasionally to reduce spam
-                    if self._targets_reached % 10 == 0:  # Log every 10th target reached
-                        print(f"🎯 Target {self._targets_reached + 1} reached! Distance: {distance_to_target:.2f}m")
+                    # Only log occasionally to reduce spam - use tqdm.write for progress bar compatibility
+                    if self._targets_reached % 25 == 0:  # Log every 25th target reached
+                        try:
+                            from tqdm import tqdm
+                            tqdm.write(f"🎯 Target {self._targets_reached + 1} reached! Distance: {distance_to_target:.2f}m")
+                        except ImportError:
+                            pass  # Silent if tqdm not available
                 else:
                     navigation_reward += 0.5  # Smaller bonus for time-based advance
-                    # Only log occasionally to reduce spam
-                    if self._targets_reached % 20 == 0:  # Log every 20th auto-advance
-                        print(f"⏰ Target {self._targets_reached + 1} auto-advanced after {self._target_visit_timer} steps")
+                    # Only log occasionally to reduce spam - use tqdm.write for progress bar compatibility
+                    if self._targets_reached % 50 == 0:  # Log every 50th auto-advance
+                        try:
+                            from tqdm import tqdm
+                            tqdm.write(f"⏰ Target {self._targets_reached + 1} auto-advanced after {self._target_visit_timer} steps")
+                        except ImportError:
+                            pass  # Silent if tqdm not available
                 
                 # Move to next target
                 self._current_target_index += 1
@@ -277,8 +435,12 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 # Only log phase completion, not every target transition
                 if self._current_target_index >= len(self._current_targets):
                     # Completed all targets in this phase
-                    if self._targets_reached % 50 == 0:  # Log every 50 completions
-                        print(f"🏆 Phase targets completed! ({self._targets_reached} total targets)")
+                    if self._targets_reached % 100 == 0:  # Log every 100 completions
+                        try:
+                            from tqdm import tqdm
+                            tqdm.write(f"🏆 Phase targets completed! ({self._targets_reached} total targets)")
+                        except ImportError:
+                            pass  # Silent if tqdm not available
                     navigation_reward += 5.0  # Bonus for completing all targets
                     # Reset to first target for continuous cycling
                     self._current_target_index = 0
@@ -388,15 +550,19 @@ class ProgressiveMixedSwimmerEnv:
         phase_new = int(self.training_progress * 4)
         
         if phase_new > phase_old:
-            print(f"\n🎓 TRAINING PHASE CHANGE: {phase_old} → {phase_new}")
-            print(f"   Progress: {old_progress:.2%} → {self.training_progress:.2%}")
-            
-            if phase_new == 1:
-                print("   📈 Phase 1: Adding first land zone")
-            elif phase_new == 2:
-                print("   📈 Phase 2: Adding second land zone")
-            elif phase_new == 3:
-                print("   📈 Phase 3: Full complexity mixed environment")
+            try:
+                from tqdm import tqdm
+                tqdm.write(f"\n🎓 TRAINING PHASE CHANGE: {phase_old} → {phase_new}")
+                tqdm.write(f"   Progress: {old_progress:.2%} → {self.training_progress:.2%}")
+                
+                if phase_new == 1:
+                    tqdm.write("   📈 Phase 1: Adding first land zone")
+                elif phase_new == 2:
+                    tqdm.write("   📈 Phase 2: Adding second land zone")
+                elif phase_new == 3:
+                    tqdm.write("   📈 Phase 3: Full complexity mixed environment")
+            except ImportError:
+                pass  # Silent if tqdm not available
             
             self._create_environment()
         
@@ -415,13 +581,21 @@ class ProgressiveMixedSwimmerEnv:
         phase_new = int(self.training_progress * 4)
         
         if phase_new != phase_old:
-            print(f"🔧 Manual phase change: {phase_old} → {phase_new} (progress: {self.training_progress:.3f})")
+            try:
+                from tqdm import tqdm
+                tqdm.write(f"🔧 Manual phase change: {phase_old} → {phase_new} (progress: {self.training_progress:.3f})")
+            except ImportError:
+                pass  # Silent if tqdm not available
             self._create_environment()
         
         # Update task progress
         if hasattr(self.env, '_task'):
             self.env._task.update_training_progress(self.training_progress)
-            print(f"🔧 Task progress updated to: {self.training_progress:.3f}")
+            try:
+                from tqdm import tqdm
+                tqdm.write(f"🔧 Task progress updated to: {self.training_progress:.3f}")
+            except ImportError:
+                pass  # Silent if tqdm not available
         
     def reset(self):
         """Reset environment and update training progress."""

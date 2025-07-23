@@ -44,7 +44,7 @@ def add_minimap(frame, land_zones, swimmer_pos, frame_width, frame_height):
         
         # Convert to minimap coordinates
         map_x = int(norm_x * minimap_size)
-        map_y = int((1.0 - norm_y) * minimap_size)  # Flip Y axis for screen coords
+        map_y = int(norm_y * minimap_size)  # No Y flip - maintain physics orientation in minimap
         
         # Clamp to bounds
         map_x = max(0, min(minimap_size - 1, map_x))
@@ -109,7 +109,7 @@ def add_minimap_with_trail(frame, land_zones, position_history, frame_width, fra
         
         # Convert to minimap coordinates
         map_x = int(norm_x * minimap_size)
-        map_y = int((1.0 - norm_y) * minimap_size)  # Flip Y axis for screen coords
+        map_y = int(norm_y * minimap_size)  # No Y flip - maintain physics orientation in minimap
         
         # Clamp to bounds
         map_x = max(0, min(minimap_size - 1, map_x))
@@ -178,6 +178,8 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
         targets_reached = 0
         phase_name = ""
         progress = 0.0
+        current_zone_type = "Water"  # Default
+        swimmer_pos = None
         
         if hasattr(env, 'env') and hasattr(env.env, 'env') and hasattr(env.env.env, '_task'):
             task = env.env.env._task
@@ -204,6 +206,24 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
                     phase_name = "Phase 3: Two Land Zones" 
                 else:
                     phase_name = "Phase 4: Full Complexity"
+            
+            # **NEW: Detect current zone type for prominent display**
+            try:
+                if hasattr(env, 'env') and hasattr(env.env, 'env'):
+                    physics = env.env.env.physics
+                    swimmer_pos = physics.named.data.xpos['head'][:2]
+                    
+                    # Check if swimmer is in any land zone
+                    in_land = False
+                    for zone in land_zones:
+                        distance = np.linalg.norm(swimmer_pos - zone['center'])
+                        if distance < zone['radius']:
+                            in_land = True
+                            break
+                    
+                    current_zone_type = "Land" if in_land else "Water"
+            except Exception as e:
+                current_zone_type = "Water"  # Default if detection fails
         
         # Add phase indicator with enhanced info
         if phase_name:
@@ -212,11 +232,34 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
             cv2.putText(frame_with_zones, phase_name, (10, 25), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            # Debug info: Show progress and zone count
+            # Debug info: Show progress and zone count  
             debug_text = f"Progress: {progress:.1%} | Zones: {len(land_zones)}"
             cv2.rectangle(frame_with_zones, (5, 40), (350, 65), (0, 0, 0), -1)
             cv2.putText(frame_with_zones, debug_text, (10, 57), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        
+        # **NEW: Prominent Current Zone Indicator**
+        # Large, bright indicator showing swimmer's current environment
+        zone_color = (0, 255, 255) if current_zone_type == "Water" else (0, 165, 255)  # Cyan for water, orange for land
+        zone_text_color = (0, 0, 0) if current_zone_type == "Water" else (255, 255, 255)  # Black text on cyan, white on orange
+        
+        # Large zone indicator (top-right corner, below step counter)
+        zone_box_width = 180
+        zone_box_height = 45
+        zone_x = width - zone_box_width - 15
+        zone_y = 70  # Below step counter and minimap
+        
+        # Draw zone indicator box with bright border
+        cv2.rectangle(frame_with_zones, (zone_x, zone_y), (zone_x + zone_box_width, zone_y + zone_box_height), zone_color, -1)
+        cv2.rectangle(frame_with_zones, (zone_x-3, zone_y-3), (zone_x + zone_box_width+3, zone_y + zone_box_height+3), (255, 255, 255), 3)
+        
+        # Zone type text (large and prominent)
+        zone_display_text = f"ZONE: {current_zone_type.upper()}"
+        text_size = cv2.getTextSize(zone_display_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+        text_x = zone_x + (zone_box_width - text_size[0]) // 2
+        text_y = zone_y + (zone_box_height + text_size[1]) // 2
+        cv2.putText(frame_with_zones, zone_display_text, (text_x, text_y), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, zone_text_color, 2)
         
         # Add step counter (positioned to avoid minimap collision)
         step_text = f"Step: {step_count}"
@@ -240,7 +283,7 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
                 y_range = 8.0   # -4 to 4
                 
                 swimmer_screen_x = int((swimmer_pos[0] + 6.0) / x_range * width)
-                swimmer_screen_y = int((swimmer_pos[1] + 4.0) / y_range * height)
+                swimmer_screen_y = int(height - (swimmer_pos[1] + 4.0) / y_range * height)  # Flip Y for screen coords
                 
                 if 0 <= swimmer_screen_x < width and 0 <= swimmer_screen_y < height:
                     # Draw bright indicator around swimmer - MUCH more visible
@@ -285,7 +328,7 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
                 
                 # Convert target position to screen coordinates
                 target_screen_x = int((target_pos[0] + 6.0) / x_range * width)
-                target_screen_y = int((target_pos[1] + 4.0) / y_range * height)
+                target_screen_y = int(height - (target_pos[1] + 4.0) / y_range * height)  # Flip Y for screen coords
                 
                 if 0 <= target_screen_x < width and 0 <= target_screen_y < height:
                     if i == current_target_index:
@@ -822,7 +865,7 @@ def add_zone_indicators(frame, env, step_count, minimap=True):
                     
                     # Convert to screen coordinates with wider view
                     screen_x = int((center_x + 6.0) / x_range * width)
-                    screen_y = int((center_y + 4.0) / y_range * height)
+                    screen_y = int(height - (center_y + 4.0) / y_range * height)  # Flip Y for screen coords
                     screen_radius = max(10, int(radius / x_range * width))  # Minimum visible radius
                     
                     # Debug: Print coordinate conversion (reduced for video creation)

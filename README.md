@@ -39,7 +39,7 @@ This project implements and extends the **Neural Central Pattern Generator (NCAP
 - **Enable adaptive locomotion** across different environments (water/land transitions)
 - **Study progressive learning** from simple to complex environmental conditions
 
-## 🧠 Biological Inspiration
+## 🧠 Biological Inspiration & Plausibility
 
 The project is based on the **NCAP (Neural Central Pattern Generator)** architecture from the paper:
 > ["Neural circuit architectural priors for embodied control"](https://arxiv.org/abs/2201.05242)
@@ -49,6 +49,59 @@ This biologically-inspired approach leverages:
 - **Oscillatory patterns** for rhythmic locomotion (60-step period)
 - **Traveling wave coordination** with consistent phase delays between joints
 - **Biological constraints** preserving muscle antagonism and coupling strength
+
+### 🔬 **Biological Plausibility Analysis**
+
+Our NCAP model achieves **high biological authenticity** by directly implementing real neural circuit principles:
+
+#### **✅ Highly Biologically Plausible Components:**
+
+**1. Central Pattern Generator (CPG)**
+- **Real biology**: C. elegans has CPG neurons that generate rhythmic motor patterns
+- **Our model**: Head oscillators create alternating dorsal/ventral activation
+- **Plausibility**: ⭐⭐⭐⭐⭐ **Excellent** - directly mimics real neural circuits
+
+**2. Proprioceptive Feedback**
+- **Real biology**: Mechanoreceptors in body segments provide position feedback
+- **Our model**: B-neurons receive input from previous joint positions  
+- **Plausibility**: ⭐⭐⭐⭐⭐ **Excellent** - matches real sensory-motor integration
+
+**3. Antagonistic Muscle Pairs**
+- **Real biology**: Dorsal and ventral muscles work against each other
+- **Our model**: `muscle_d - muscle_v` creates antagonistic torque output
+- **Plausibility**: ⭐⭐⭐⭐⭐ **Excellent** - fundamental biological principle
+
+**4. Graded Neural Activation** 
+- **Real biology**: Neurons have saturation limits, can't fire infinitely
+- **Our model**: `graded()` function clamps activation to [0,1]
+- **Plausibility**: ⭐⭐⭐⭐⭐ **Excellent** - prevents unrealistic neural activity
+
+**5. Excitatory/Inhibitory Constraints**
+- **Real biology**: Synapses are either excitatory (≥0) or inhibitory (≤0)
+- **Our model**: Parameter constraints enforce biological sign restrictions
+- **Plausibility**: ⭐⭐⭐⭐⭐ **Excellent** - fundamental neuroscience principle
+
+#### **📊 Comparison to Real C. elegans:**
+
+| **Aspect** | **Real C. elegans** | **Our NCAP Model** | **Match** |
+|------------|-------------------|-------------------|-----------|
+| **CPG oscillation** | AVB/AVA command neurons | Head oscillators | ⭐⭐⭐⭐⭐ |
+| **Proprioception** | PLM/ALM mechanoreceptors | Joint position feedback | ⭐⭐⭐⭐⭐ |
+| **Muscle antagonism** | Dorsal/ventral muscle classes | muscle_d vs muscle_v | ⭐⭐⭐⭐⭐ |
+| **Segmentation** | Repeated VNC motifs | Per-joint B-neurons | ⭐⭐⭐⭐ |
+| **Neural dynamics** | Continuous membrane potential | Discrete graded activation | ⭐⭐⭐ |
+| **Adaptation** | Neuromodulation (dopamine, etc.) | LSTM + environment layers | ⭐⭐ |
+
+#### **🏆 Overall Biological Plausibility Rating: ⭐⭐⭐⭐ (Very Good)**
+
+**Biological Authenticity Strengths:**
+- Core architecture follows established neuroscience principles
+- Weight constraints prevent biologically impossible connections  
+- Segmental organization matches real nervous system structure
+- Sensory-motor integration replicates proprioceptive feedback loops
+- Oscillator-driven locomotion mimics real CPG function
+
+**Summary**: Our NCAP model is **highly biologically plausible** in its core architecture and constraints, with the main departures being computational conveniences and artificial environment adaptation modules. The fundamental swimming circuit closely matches real C. elegans neural organization!
 
 ## 🏗️ Architecture
 

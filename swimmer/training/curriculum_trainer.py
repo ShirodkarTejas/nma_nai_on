@@ -464,11 +464,11 @@ class CurriculumNCAPTrainer:
             if self.current_step % self.save_steps == 0:
                 tqdm.write(f"\n💾 Checkpoint at step {self.current_step:,}")
                 
-                # Save comprehensive checkpoint
-                checkpoint_path = self.save_checkpoint(tonic_model, self.current_step, eval_results)
-                
-                # Comprehensive evaluation
+                # Comprehensive evaluation first
                 eval_results = self.evaluate_performance(agent, env, num_episodes=10)
+                
+                # Save comprehensive checkpoint with eval results
+                checkpoint_path = self.save_checkpoint(tonic_model, self.current_step, eval_results)
                 tqdm.write(f"📊 Performance across all phases:")
                 for phase, results in eval_results.items():
                     tqdm.write(f"   Phase {phase}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f} "
