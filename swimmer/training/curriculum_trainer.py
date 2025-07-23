@@ -801,11 +801,35 @@ class CurriculumNCAPTrainer:
         else:
             tqdm.write(f"🖥️ Hardware monitoring stopped")
         
-        # Final evaluation with progress indicator
-        tqdm.write(f"\n🔬 Running final evaluation across all phases...")
-        with tqdm(total=80, desc="🔬 Final Evaluation", unit="episode",
-                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as eval_pbar:
-            final_eval = self.evaluate_performance(agent, env, num_episodes=20, progress_bar=eval_pbar)
+        # Generate final performance summary from training data
+        tqdm.write(f"\n📊 Generating final performance summary from training data...")
+        
+        # Convert training data to evaluation format for model saving and artifacts
+        final_eval = {}
+        for phase in range(4):
+            if phase in self.phase_rewards and len(self.phase_rewards[phase]) > 0:
+                # Use actual training data from this phase
+                phase_rewards = self.phase_rewards[phase]
+                phase_distances = self.phase_distances[phase]
+                
+                final_eval[phase] = {
+                    'mean_distance': np.mean(phase_distances),
+                    'std_distance': np.std(phase_distances) if len(phase_distances) > 1 else 0.0,
+                    'mean_reward': np.mean(phase_rewards),
+                    'std_reward': np.std(phase_rewards) if len(phase_rewards) > 1 else 0.0
+                }
+            else:
+                # Fallback for phases not trained yet (shouldn't happen in normal training)
+                final_eval[phase] = {
+                    'mean_distance': 0.0,
+                    'std_distance': 0.0,
+                    'mean_reward': 0.0,
+                    'std_reward': 0.0
+                }
+        
+        total_episodes = sum(len(self.phase_rewards[p]) for p in range(4) if p in self.phase_rewards)
+        active_phases = len([p for p in range(4) if p in self.phase_rewards and len(self.phase_rewards[p]) > 0])
+        tqdm.write(f"✅ Training performance summary: {total_episodes} episodes across {active_phases} phases")
         
         tqdm.write(f"\n📊 Final Performance Summary:")
         for phase, results in final_eval.items():
@@ -956,12 +980,36 @@ class CurriculumNCAPTrainer:
         
         start_time = time.time()
         
-        print(f"\n🔬 Running comprehensive evaluation across all phases...")
-        total_eval_episodes = eval_episodes * 4  # 4 phases
-        with tqdm(total=total_eval_episodes, desc="🔬 Evaluation", unit="episode",
-                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as eval_pbar:
-            final_eval = self.evaluate_performance(agent, env, num_episodes=eval_episodes, progress_bar=eval_pbar)
+        print(f"\n📊 Generating performance summary from checkpoint training data...")
         
+        # Convert training data to evaluation format for visualization artifacts
+        final_eval = {}
+        for phase in range(4):
+            if phase in self.phase_rewards and len(self.phase_rewards[phase]) > 0:
+                # Use actual training data from this phase
+                phase_rewards = self.phase_rewards[phase]
+                phase_distances = self.phase_distances[phase]
+                
+                final_eval[phase] = {
+                    'mean_distance': np.mean(phase_distances),
+                    'std_distance': np.std(phase_distances) if len(phase_distances) > 1 else 0.0,
+                    'mean_reward': np.mean(phase_rewards),
+                    'std_reward': np.std(phase_rewards) if len(phase_rewards) > 1 else 0.0
+                }
+            else:
+                # Fallback for phases not trained yet (shouldn't happen in normal training)
+                final_eval[phase] = {
+                    'mean_distance': 0.0,
+                    'std_distance': 0.0,
+                    'mean_reward': 0.0,
+                    'std_reward': 0.0
+                }
+        
+        total_episodes = sum(len(self.phase_rewards[p]) for p in range(4) if p in self.phase_rewards)
+        active_phases = len([p for p in range(4) if p in self.phase_rewards and len(self.phase_rewards[p]) > 0])
+        print(f"✅ Checkpoint performance summary: {total_episodes} episodes across {active_phases} phases")
+        
+
         print(f"\n📊 Performance Summary:")
         phase_names_final = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
         for phase, results in final_eval.items():

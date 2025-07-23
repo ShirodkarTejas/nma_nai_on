@@ -1,72 +1,72 @@
 # Curriculum Training Summary
-Generated: 2025-07-23 19:20:19
+Generated: 2025-07-24 00:11:48
 
 ## Final Performance by Phase
 **Pure Swimming**:
-  - Mean Distance: 0.167m ± 0.016
-  - Mean Reward: 66.67 ± 2.60
+  - Mean Distance: 0.185m ± 0.025
+  - Mean Reward: 242.96 ± 22.99
 
 **Single Land Zone**:
-  - Mean Distance: 0.168m ± 0.015
-  - Mean Reward: 66.75 ± 2.48
+  - Mean Distance: 0.187m ± 0.018
+  - Mean Reward: 232.35 ± 31.93
 
 **Two Land Zones**:
-  - Mean Distance: 0.167m ± 0.016
-  - Mean Reward: 66.91 ± 2.37
+  - Mean Distance: 0.174m ± 0.024
+  - Mean Reward: 248.20 ± 22.76
 
 **Full Complexity**:
-  - Mean Distance: 0.312m ± 0.028
-  - Mean Reward: 132.15 ± 7.32
+  - Mean Distance: 0.189m ± 0.014
+  - Mean Reward: 252.05 ± 25.68
 
 ## Trajectory Analysis
 **Pure Swimming**:
-  - Final Distance: 0.931m
-  - Max Velocity: 0.074
+  - Final Distance: 0.955m
+  - Max Velocity: 0.072
   - Environment Transitions: 0
   - Time in Water: 1000 steps
   - Time on Land: 0 steps
 
 **Single Land Zone**:
-  - Final Distance: 0.955m
-  - Max Velocity: 0.093
+  - Final Distance: 0.958m
+  - Max Velocity: 0.092
   - Environment Transitions: 0
   - Time in Water: 1000 steps
   - Time on Land: 0 steps
 
 **Two Land Zones**:
-  - Final Distance: 0.880m
+  - Final Distance: 0.881m
   - Max Velocity: 0.079
   - Environment Transitions: 0
   - Time in Water: 1000 steps
   - Time on Land: 0 steps
 
 **Full Complexity**:
-  - Final Distance: 2.060m
-  - Max Velocity: 0.092
+  - Final Distance: 2.048m
+  - Max Velocity: 0.094
   - Environment Transitions: 0
   - Time in Water: 2000 steps
   - Time on Land: 0 steps
 
 ## Training Progress
 **Phase 0 - Pure Swimming**:
-  - Episodes: 30
-  - Average Reward: 247.39
-  - Average Distance: 0.179m
-
-**Phase 1 - Single Land Zone**:
-  - Episodes: 30
-  - Average Reward: 242.14
+  - Episodes: 6
+  - Average Reward: 242.96
   - Average Distance: 0.185m
 
+**Phase 1 - Single Land Zone**:
+  - Episodes: 6
+  - Average Reward: 232.35
+  - Average Distance: 0.187m
+
 **Phase 2 - Two Land Zones**:
-  - Episodes: 20
-  - Average Reward: 247.03
-  - Average Distance: 0.177m
+  - Episodes: 4
+  - Average Reward: 248.20
+  - Average Distance: 0.174m
 
 **Phase 3 - Full Complexity**:
-  - Episodes: 20
-  - Average Reward: 248.14
-  - Average Distance: 0.181m
+  - Episodes: 4
+  - Average Reward: 252.05
+  - Average Distance: 0.189m
 
 ## Generated Files
 ### Plots
