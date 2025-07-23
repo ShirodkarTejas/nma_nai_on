@@ -1,0 +1,23 @@
+No training data available.
+
+=== ADVANCED METRICS ===
+
+Hardware Utilization:
+  - Peak CPU: 46.0%
+  - Peak Memory: 40.2%
+  - Total Disk Used: 816.7 GB
+
+Training Health:
+  - Average Gradient Norm: 0.0000
+  - Loss Stability (variance): 0.0000
+  - Parameter Change Rate: 0.0000
+
+Performance Analysis:
+  - Average Steps/Sec: 0.0
+  - Performance Stability: 0.0
+
+ETA Accuracy:
+  - ETA Predictions Made: 0
+  - Final ETA: N/A
+
+=== RECOMMENDATIONS ===

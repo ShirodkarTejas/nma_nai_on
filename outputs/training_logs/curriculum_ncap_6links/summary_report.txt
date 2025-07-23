@@ -1,7 +1,7 @@
 
 === TRAINING SUMMARY REPORT ===
 Experiment: curriculum_ncap_6links
-Duration: 4.65 minutes
+Duration: 5.25 minutes
 Total Episodes: 0
 Total Training Steps: 4
 

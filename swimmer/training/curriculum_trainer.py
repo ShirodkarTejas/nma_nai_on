@@ -10,7 +10,11 @@ import numpy as np
 import os
 import time
 import tonic
+import warnings
 from tqdm import tqdm
+
+# Suppress the harmless gym Box precision warning
+warnings.filterwarnings("ignore", message=".*Box bound precision lowered by casting to.*")
 from ..models.simple_ncap import SimpleNCAPSwimmer
 from ..environments.progressive_mixed_env import TonicProgressiveMixedWrapper
 from ..utils.training_logger import TrainingLogger
@@ -196,7 +200,7 @@ class CurriculumNCAPTrainer:
         else:
             return 3  # Full complexity
     
-    def evaluate_performance(self, agent, env, num_episodes=5):
+    def evaluate_performance(self, agent, env, num_episodes=5, progress_bar=None):
         """Evaluate current performance across different phases."""
         evaluation_results = {}
         
@@ -207,7 +211,7 @@ class CurriculumNCAPTrainer:
             distances = []
             rewards = []
             
-            for _ in range(num_episodes):
+            for episode in range(num_episodes):
                 # Set environment to specific phase
                 env.env.training_progress = temp_progress
                 env.env._create_environment()
@@ -229,6 +233,12 @@ class CurriculumNCAPTrainer:
                 
                 distances.append(distance)
                 rewards.append(episode_reward)
+                
+                # Update progress bar if provided
+                if progress_bar is not None:
+                    phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+                    progress_bar.set_description(f"🔬 Evaluating {phase_names[phase]} ({episode+1}/{num_episodes})")
+                    progress_bar.update(1)
             
             evaluation_results[phase] = {
                 'mean_distance': np.mean(distances),
@@ -457,11 +467,18 @@ class CurriculumNCAPTrainer:
         total_time_hours = (time.time() - start_time) / 3600
         tqdm.write(f"   Total time: {total_time_hours:.2f} hours")
         
-        # Stop hardware monitoring
+        # Stop hardware monitoring with indicator
         if ADVANCED_LOGGING_AVAILABLE:
-            self.logger.stop_monitoring()
+            self.logger.stop_monitoring()  # Advanced logger handles its own progress messages
+        else:
+            tqdm.write(f"🖥️ Hardware monitoring stopped")
         
-        final_eval = self.evaluate_performance(agent, env, num_episodes=20)
+        # Final evaluation with progress indicator
+        tqdm.write(f"\n🔬 Running final evaluation across all phases...")
+        with tqdm(total=80, desc="🔬 Final Evaluation", unit="episode",
+                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as eval_pbar:
+            final_eval = self.evaluate_performance(agent, env, num_episodes=20, progress_bar=eval_pbar)
+        
         tqdm.write(f"\n📊 Final Performance Summary:")
         for phase, results in final_eval.items():
             phase_names_final = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
@@ -485,64 +502,92 @@ class CurriculumNCAPTrainer:
         # Create final visualizations
         tqdm.write(f"\n🎨 Creating final training visualizations...")
         
-        # Final training plots
-        final_plot_path = f"outputs/curriculum_training/plots/curriculum_final_plots.png"
-        create_curriculum_plots(
-            phase_rewards=self.phase_rewards,
-            phase_distances=self.phase_distances,
-            eval_results=final_eval,
-            save_path=final_plot_path
-        )
+        # Create progress bar for final visualizations
+        final_tasks = [
+            "Creating final training plots",
+            "Trajectory analysis: Pure Swimming", 
+            "Trajectory analysis: Single Land Zone",
+            "Trajectory analysis: Two Land Zones", 
+            "Trajectory analysis: Full Complexity",
+            "Creating phase comparison video",
+            "Generating training summary",
+            "Creating comprehensive report"
+        ]
         
-        # Final trajectory analysis for each phase
-        phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
-        final_trajectory_stats = {}
-        
-        for phase in range(4):
-            tqdm.write(f"📊 Creating final trajectory analysis for {phase_names[phase]}...")
+        with tqdm(total=len(final_tasks), desc="🎬 Final Analysis", unit="task", 
+                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
             
-            # Set environment to specific phase using manual override
-            temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
-            env.env.set_manual_progress(temp_progress)
+            # Final training plots
+            pbar.set_description("📊 Creating training plots")
+            final_plot_path = f"outputs/curriculum_training/plots/curriculum_final_plots.png"
+            create_curriculum_plots(
+                phase_rewards=self.phase_rewards,
+                phase_distances=self.phase_distances,
+                eval_results=final_eval,
+                save_path=final_plot_path
+            )
+            pbar.update(1)
+            tqdm.write(f"✅ Training plots saved to: {final_plot_path}")
             
-            trajectory_path = f"outputs/curriculum_training/plots/final_trajectory_phase_{phase}.png"
-            stats = create_trajectory_analysis(
+            # Final trajectory analysis for each phase
+            phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+            final_trajectory_stats = {}
+            
+            for phase in range(4):
+                pbar.set_description(f"📊 Analyzing {phase_names[phase]}")
+                
+                # Set environment to specific phase using manual override
+                temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
+                env.env.set_manual_progress(temp_progress)
+                
+                trajectory_path = f"outputs/curriculum_training/plots/final_trajectory_phase_{phase}.png"
+                stats = create_trajectory_analysis(
+                    agent=agent,
+                    env=env,
+                    save_path=trajectory_path,
+                    num_steps=1000,  # Longer analysis for final evaluation
+                    phase_name=f"Final - {phase_names[phase]}"
+                )
+                
+                final_trajectory_stats[phase] = stats
+                pbar.update(1)
+                tqdm.write(f"   ✅ {phase_names[phase]}: {stats['final_distance']:.3f}m, {stats['transitions']} transitions")
+            
+            # Final test video with phase comparisons
+            pbar.set_description("🎬 Creating phase comparison video")
+            final_video_path = f"outputs/curriculum_training/videos/curriculum_final_video.mp4"
+            create_phase_comparison_video(
                 agent=agent,
                 env=env,
-                save_path=trajectory_path,
-                num_steps=1000,  # Longer analysis for final evaluation
-                phase_name=f"Final - {phase_names[phase]}"
+                save_path=final_video_path,
+                phases_to_test=[0, 1, 2, 3]
             )
+            pbar.update(1)
+            tqdm.write(f"✅ Phase comparison video: {final_video_path}")
             
-            final_trajectory_stats[phase] = stats
-            tqdm.write(f"   Final distance: {stats['final_distance']:.3f}m, transitions: {stats['transitions']}")
-        
-        # Final test video with phase comparisons
-        final_video_path = f"outputs/curriculum_training/videos/curriculum_final_video.mp4"
-        create_phase_comparison_video(
-            agent=agent,
-            env=env,
-            save_path=final_video_path,
-            phases_to_test=[0, 1, 2, 3]
-        )
-        
-        # Training summary
-        summary_path = f"outputs/curriculum_training/summaries/curriculum_training_summary.md"
-        save_training_summary(
-            eval_results=final_eval,
-            training_history={
-                'phase_rewards': self.phase_rewards,
-                'phase_distances': self.phase_distances,
-                'trajectory_stats': final_trajectory_stats,
-            },
-            save_path=summary_path
-        )
-        
-        # Generate comprehensive report with advanced metrics
-        if ADVANCED_LOGGING_AVAILABLE:
-            tqdm.write(f"\n📊 Generating comprehensive training report...")
-            comprehensive_report = self.logger.save_comprehensive_report()
-            tqdm.write(f"✅ Advanced training analysis complete")
+            # Training summary
+            pbar.set_description("📄 Generating training summary")
+            summary_path = f"outputs/curriculum_training/summaries/curriculum_training_summary.md"
+            save_training_summary(
+                eval_results=final_eval,
+                training_history={
+                    'phase_rewards': self.phase_rewards,
+                    'phase_distances': self.phase_distances,
+                    'trajectory_stats': final_trajectory_stats,
+                },
+                save_path=summary_path
+            )
+            pbar.update(1)
+            tqdm.write(f"✅ Training summary: {summary_path}")
+            
+            # Generate comprehensive report with advanced metrics
+            if ADVANCED_LOGGING_AVAILABLE:
+                pbar.set_description("📊 Creating comprehensive report")
+                comprehensive_report = self.logger.save_comprehensive_report()
+                pbar.update(1)
+                tqdm.write(f"✅ Advanced training analysis complete")
+            else:
+                pbar.update(1)  # Skip if not available
         
         env.close()
         return model, final_eval 

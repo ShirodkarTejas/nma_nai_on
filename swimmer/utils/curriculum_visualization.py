@@ -8,7 +8,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import imageio
 import os
+import warnings
 from datetime import datetime
+from tqdm import tqdm
+
+# Suppress the matplotlib tight_layout warning
+warnings.filterwarnings("ignore", message=".*This figure includes Axes that are not compatible with tight_layout.*")
 
 
 def add_minimap(frame, land_zones, swimmer_pos, frame_width, frame_height):
@@ -158,7 +163,7 @@ def add_minimap_with_trail(frame, land_zones, position_history, frame_width, fra
 
 
 def add_zone_indicators_with_trail(frame, env, step_count, position_history, show_minimap=True):
-    """Add zone indicators with minimap showing swimmer trail."""
+    """Add zone indicators with minimap showing swimmer trail and navigation targets."""
     try:
         import cv2
         import numpy as np
@@ -166,8 +171,11 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
         frame_with_zones = frame.copy()
         height, width = frame.shape[:2]
         
-        # Get current zones from environment
+        # Get current zones and targets from environment
         land_zones = []
+        current_targets = []
+        current_target_index = 0
+        targets_reached = 0
         phase_name = ""
         progress = 0.0
         
@@ -178,6 +186,14 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
             # Get current land zones
             if hasattr(task, '_current_land_zones'):
                 land_zones = task._current_land_zones or []
+            
+            # Get current targets
+            if hasattr(task, '_current_targets'):
+                current_targets = task._current_targets or []
+            if hasattr(task, '_current_target_index'):
+                current_target_index = task._current_target_index
+            if hasattr(task, '_targets_reached'):
+                targets_reached = task._targets_reached
                 
                 # Phase detection
                 if progress < 0.3:
@@ -213,11 +229,102 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
             cv2.putText(frame_with_zones, step_text, (width-150, 25), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
-        # Add untrained model warning
-        warning_text = "UNTRAINED MODEL"
-        cv2.rectangle(frame_with_zones, (width-200, height-40), (width-5, height-10), (0, 0, 139), -1)
-        cv2.putText(frame_with_zones, warning_text, (width-195, height-20), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        # Add swimmer position indicator (bright circle at swimmer location)
+        try:
+            if hasattr(env, 'env') and hasattr(env.env, 'env'):
+                physics = env.env.env.physics
+                swimmer_pos = physics.named.data.xpos['head'][:2]
+                
+                # Convert swimmer position to screen coordinates
+                x_range = 12.0  # -6 to 6 
+                y_range = 8.0   # -4 to 4
+                
+                swimmer_screen_x = int((swimmer_pos[0] + 6.0) / x_range * width)
+                swimmer_screen_y = int((swimmer_pos[1] + 4.0) / y_range * height)
+                
+                if 0 <= swimmer_screen_x < width and 0 <= swimmer_screen_y < height:
+                    # Draw bright indicator around swimmer
+                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 20, (0, 255, 255), 3)  # Cyan circle
+                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 8, (255, 255, 255), -1)  # White center
+                    cv2.putText(frame_with_zones, "SWIMMER", (swimmer_screen_x-30, swimmer_screen_y-25), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+        except:
+            pass
+        
+        # Add training status indicator (dynamic based on training progress)
+        if progress < 0.1:  # Less than 10% training progress
+            status_text = "UNTRAINED MODEL"
+            status_color = (0, 0, 139)  # Dark red
+            text_color = (255, 255, 255)  # White
+        elif progress < 0.5:  # 10-50% training progress
+            status_text = "TRAINING IN PROGRESS"
+            status_color = (0, 139, 139)  # Dark yellow/orange
+            text_color = (255, 255, 255)  # White
+        else:  # 50%+ training progress
+            status_text = "TRAINED MODEL"
+            status_color = (0, 139, 0)  # Dark green
+            text_color = (255, 255, 255)  # White
+        
+        cv2.rectangle(frame_with_zones, (width-220, height-40), (width-5, height-10), status_color, -1)
+        cv2.putText(frame_with_zones, status_text, (width-215, height-20), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1)
+        
+        # Add navigation targets (if available)
+        if current_targets and len(current_targets) > 0:
+            # Convert physics coordinates to screen coordinates
+            x_range = 12.0  # -6 to 6 
+            y_range = 8.0   # -4 to 4
+            
+            for i, target in enumerate(current_targets):
+                target_pos = target['position']
+                target_type = target['type']
+                
+                # Convert target position to screen coordinates
+                target_screen_x = int((target_pos[0] + 6.0) / x_range * width)
+                target_screen_y = int((target_pos[1] + 4.0) / y_range * height)
+                
+                if 0 <= target_screen_x < width and 0 <= target_screen_y < height:
+                    if i == current_target_index:
+                        # Current target - bright and pulsing
+                        pulse_intensity = int(127 + 128 * abs(np.sin(step_count * 0.3)))
+                        if target_type == 'swim':
+                            color = (0, pulse_intensity, 255)  # Bright blue for swim targets
+                        else:
+                            color = (0, pulse_intensity, 0)    # Bright green for land targets
+                        
+                        # Draw target with border
+                        cv2.circle(frame_with_zones, (target_screen_x, target_screen_y), 15, color, -1)
+                        cv2.circle(frame_with_zones, (target_screen_x, target_screen_y), 15, (255, 255, 255), 2)
+                        
+                        # Add target number
+                        cv2.putText(frame_with_zones, str(i+1), 
+                                  (target_screen_x-6, target_screen_y+6), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    elif i < current_target_index:
+                        # Completed target - dimmed
+                        if target_type == 'swim':
+                            color = (0, 64, 128)  # Dim blue
+                        else:
+                            color = (0, 64, 0)    # Dim green
+                        
+                        cv2.circle(frame_with_zones, (target_screen_x, target_screen_y), 10, color, -1)
+                        cv2.circle(frame_with_zones, (target_screen_x, target_screen_y), 10, (128, 128, 128), 1)
+                        
+                        # Checkmark for completed
+                        cv2.putText(frame_with_zones, "✓", 
+                                  (target_screen_x-6, target_screen_y+6), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    else:
+                        # Future target - faded
+                        if target_type == 'swim':
+                            color = (0, 100, 200)  # Faded blue
+                        else:
+                            color = (0, 100, 0)    # Faded green
+                        
+                        cv2.circle(frame_with_zones, (target_screen_x, target_screen_y), 8, color, 1)
+                        cv2.putText(frame_with_zones, str(i+1), 
+                                  (target_screen_x-4, target_screen_y+4), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
         
         # Add minimap with trail if requested and zones exist
         if show_minimap and len(land_zones) > 0 and len(position_history) > 0:
@@ -331,12 +438,15 @@ def create_trajectory_analysis(agent, env, save_path, num_steps=500, phase_name=
     ax1.set_ylabel('Y Position')
     ax1.grid(True, alpha=0.3)
     
-    # Get land zones from environment
+    # Get land zones and targets from environment
     land_zones = []
+    current_targets = []
     if hasattr(env, 'env') and hasattr(env.env, 'env') and hasattr(env.env.env, '_task'):
         task = env.env.env._task
         if hasattr(task, '_current_land_zones'):
             land_zones = task._current_land_zones or []
+        if hasattr(task, '_current_targets'):
+            current_targets = task._current_targets or []
     
     # Draw land zones
     for i, zone in enumerate(land_zones):
@@ -344,6 +454,29 @@ def create_trajectory_analysis(agent, env, save_path, num_steps=500, phase_name=
                           facecolor='lightgreen', edgecolor='green', 
                           alpha=0.6, linewidth=2, label=f'Land Zone {i+1}')
         ax1.add_patch(circle)
+    
+    # Draw navigation targets
+    for i, target in enumerate(current_targets):
+        target_pos = target['position']
+        target_type = target['type']
+        
+        if target_type == 'swim':
+            color = 'blue'
+            marker = 'o'
+            label_prefix = 'Swim'
+        else:
+            color = 'red'
+            marker = 's'
+            label_prefix = 'Land'
+        
+        ax1.plot(target_pos[0], target_pos[1], marker=marker, color=color, 
+                markersize=10, markeredgecolor='white', markeredgewidth=2,
+                label=f'{label_prefix} Target {i+1}')
+        
+        # Add target number annotation
+        ax1.annotate(f'{i+1}', (target_pos[0], target_pos[1]), 
+                    textcoords="offset points", xytext=(0,0), ha='center', va='center',
+                    fontsize=8, fontweight='bold', color='white')
     
     # Plot trajectory
     if len(positions) > 1:
@@ -360,14 +493,28 @@ def create_trajectory_analysis(agent, env, save_path, num_steps=500, phase_name=
             ax1.plot(positions[land_indices, 0], positions[land_indices, 1], 
                     'r-', linewidth=2, alpha=0.7, label='Land Movement')
         
-        # Mark start and end points
-        ax1.plot(positions[0, 0], positions[0, 1], 'ko', markersize=8, label='Start')
-        ax1.plot(positions[-1, 0], positions[-1, 1], 'ro', markersize=8, label='End')
+        # Mark start and end points with enhanced visibility
+        ax1.plot(positions[0, 0], positions[0, 1], 'ko', markersize=12, 
+                markeredgecolor='white', markeredgewidth=2, label='Start')
+        ax1.plot(positions[-1, 0], positions[-1, 1], 'ro', markersize=12, 
+                markeredgecolor='white', markeredgewidth=2, label='End')
         
-        # Add trajectory points (every 50th point)
-        sample_indices = range(0, len(positions), 50)
+        # Add trajectory points (every 25th point for better visibility)
+        sample_indices = range(0, len(positions), 25)
         ax1.plot(positions[sample_indices, 0], positions[sample_indices, 1], 
-                'ko', markersize=3, alpha=0.5, label='Trajectory Points')
+                'ko', markersize=4, alpha=0.7, markeredgecolor='yellow', 
+                markeredgewidth=0.5, label='Trajectory Points')
+        
+        # Add swimmer direction arrows (every 100th point)
+        arrow_indices = range(50, len(positions)-50, 100)
+        for i in arrow_indices:
+            if i+10 < len(positions):
+                start_pos = positions[i]
+                direction = positions[i+10] - positions[i]
+                if np.linalg.norm(direction) > 0.01:  # Only if moving
+                    direction = direction / np.linalg.norm(direction) * 0.3  # Normalize and scale
+                    ax1.arrow(start_pos[0], start_pos[1], direction[0], direction[1],
+                            head_width=0.1, head_length=0.05, fc='purple', ec='purple', alpha=0.7)
     
     ax1.legend(loc='upper right')
     ax1.set_aspect('equal')
@@ -481,40 +628,60 @@ def create_curriculum_plots(phase_rewards, phase_distances, eval_results, save_p
     
     # 1. Reward progression by phase
     ax1.set_title('Reward Progress by Training Phase', fontsize=14, fontweight='bold')
+    legend_added = False
     for phase in range(4):
         if phase in phase_rewards and len(phase_rewards[phase]) > 0:
             rewards = phase_rewards[phase]
             episodes = range(len(rewards))
-            ax1.plot(episodes, rewards, color=colors[phase], alpha=0.6, linewidth=1)
-            # Add moving average
+            # Plot raw data with markers
+            ax1.plot(episodes, rewards, color=colors[phase], alpha=0.4, linewidth=1, 
+                    marker='o', markersize=2, label=f'Phase {phase}: {phase_names[phase]} (raw)')
+            legend_added = True
+            
+            # Add moving average if enough data
             if len(rewards) > 10:
                 window = min(50, len(rewards) // 4)
                 moving_avg = np.convolve(rewards, np.ones(window)/window, mode='valid')
                 ax1.plot(episodes[window-1:], moving_avg, color=colors[phase], 
-                        linewidth=2, label=f'Phase {phase}: {phase_names[phase]}')
+                        linewidth=3, label=f'Phase {phase}: {phase_names[phase]} (avg)')
+            elif len(rewards) > 1:
+                # For short runs, just show a thicker line
+                ax1.plot(episodes, rewards, color=colors[phase], linewidth=3, 
+                        marker='o', markersize=4, label=f'Phase {phase}: {phase_names[phase]}')
     
     ax1.set_xlabel('Episodes in Phase')
     ax1.set_ylabel('Reward')
-    ax1.legend()
+    if legend_added:
+        ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
     
     # 2. Distance progression by phase
     ax2.set_title('Distance Progress by Training Phase', fontsize=14, fontweight='bold')
+    legend_added_dist = False
     for phase in range(4):
         if phase in phase_distances and len(phase_distances[phase]) > 0:
             distances = phase_distances[phase]
             episodes = range(len(distances))
-            ax2.plot(episodes, distances, color=colors[phase], alpha=0.6, linewidth=1)
-            # Add moving average
+            # Plot raw data with markers
+            ax2.plot(episodes, distances, color=colors[phase], alpha=0.4, linewidth=1, 
+                    marker='s', markersize=2, label=f'Phase {phase}: {phase_names[phase]} (raw)')
+            legend_added_dist = True
+            
+            # Add moving average if enough data
             if len(distances) > 10:
                 window = min(50, len(distances) // 4)
                 moving_avg = np.convolve(distances, np.ones(window)/window, mode='valid')
                 ax2.plot(episodes[window-1:], moving_avg, color=colors[phase], 
-                        linewidth=2, label=f'Phase {phase}: {phase_names[phase]}')
+                        linewidth=3, label=f'Phase {phase}: {phase_names[phase]} (avg)')
+            elif len(distances) > 1:
+                # For short runs, just show a thicker line
+                ax2.plot(episodes, distances, color=colors[phase], linewidth=3, 
+                        marker='s', markersize=4, label=f'Phase {phase}: {phase_names[phase]}')
     
     ax2.set_xlabel('Episodes in Phase')
     ax2.set_ylabel('Distance (m)')
-    ax2.legend()
+    if legend_added_dist:
+        ax2.legend(fontsize=8)
     ax2.grid(True, alpha=0.3)
     
     # 3. Performance comparison across phases
@@ -583,10 +750,21 @@ def create_curriculum_plots(phase_rewards, phase_distances, eval_results, save_p
     # Create directory if needed
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    
-    print(f"📊 Curriculum training plots saved to: {save_path}")
+    try:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"📊 Curriculum training plots saved to: {save_path}")
+        
+        # Verify file was actually created
+        if os.path.exists(save_path):
+            file_size = os.path.getsize(save_path)
+            print(f"✅ Plot file verified: {file_size} bytes")
+        else:
+            print(f"❌ Plot file was not created at: {save_path}")
+            
+    except Exception as e:
+        print(f"❌ Error saving curriculum plots: {e}")
+        plt.close()
 
 
 def add_zone_indicators(frame, env, step_count, minimap=True):
@@ -621,8 +799,8 @@ def add_zone_indicators(frame, env, step_count, minimap=True):
                 else:
                     phase_name = "Phase 4: Full Complexity"
                 
-                # Debug: Print zone info (first few frames only to avoid spam)
-                if step_count < 5:
+                # Debug: Print zone info (first few frames only to avoid spam) - reduced for video creation
+                if step_count < 2:  # Reduced from 5 to 2
                     print(f"🔍 Debug zone info: Progress={progress:.3f}, Phase='{phase_name}', Land zones={len(land_zones)}")
                     if land_zones:
                         for i, zone in enumerate(land_zones):
@@ -643,8 +821,8 @@ def add_zone_indicators(frame, env, step_count, minimap=True):
                     screen_y = int((center_y + 4.0) / y_range * height)
                     screen_radius = max(10, int(radius / x_range * width))  # Minimum visible radius
                     
-                    # Debug: Print coordinate conversion (first few frames)
-                    if step_count < 3:
+                    # Debug: Print coordinate conversion (reduced for video creation)
+                    if step_count < 1:  # Reduced from 3 to 1
                         print(f"   Zone {i} coords: physics=({center_x}, {center_y}, r={radius}) → screen=({screen_x}, {screen_y}, r={screen_radius})")
                     
                     # Ensure coordinates are within frame bounds
@@ -667,7 +845,10 @@ def add_zone_indicators(frame, env, step_count, minimap=True):
                         cv2.rectangle(frame_with_zones, (label_x-3, label_y-18), 
                                     (label_x + label_size[0]+3, label_y+3), (255, 255, 255), -1)
                         cv2.putText(frame_with_zones, label, (label_x, label_y), 
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (139, 69, 19), 2)
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (139, 69, 19), 2)
+        
+        # Note: Target visualization removed from simple zone indicators
+        # Use add_zone_indicators_with_trail for full target visualization
         
         # Add water zone indicator (if not pure land)
         if len(land_zones) > 0:
@@ -692,11 +873,13 @@ def add_zone_indicators(frame, env, step_count, minimap=True):
         cv2.putText(frame_with_zones, step_text, (width-150, 25), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
-        # Add untrained model warning
-        warning_text = "UNTRAINED MODEL"
-        cv2.rectangle(frame_with_zones, (width-200, height-40), (width-5, height-10), (0, 0, 139), -1)
-        cv2.putText(frame_with_zones, warning_text, (width-195, height-20), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        # Add training status indicator
+        status_text = "CURRICULUM TRAINING"
+        status_color = (0, 139, 139)  # Dark yellow/orange
+        text_color = (255, 255, 255)  # White
+        cv2.rectangle(frame_with_zones, (width-220, height-40), (width-5, height-10), status_color, -1)
+        cv2.putText(frame_with_zones, status_text, (width-215, height-20), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1)
         
         # Add minimap if requested and zones exist
         if minimap and len(land_zones) > 0:
@@ -809,53 +992,89 @@ def create_phase_comparison_video(agent, env, save_path, phases_to_test=None):
     phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
     all_frames = []
     
-    for phase in phases_to_test:
-        print(f"🎬 Recording phase {phase}: {phase_names[phase]}")
-        
-        # Set environment to specific phase using manual override
-        temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
-        env.env.set_manual_progress(temp_progress)
-        
-        # Record this phase
-        phase_frames = []
-        obs = env.reset()
-        
-        for step in range(100):  # 100 steps per phase
-            try:
-                frame = env.render(mode='rgb_array')
-                if frame is not None:
-                    # Use simple zone indicators for phase comparison (no trail needed)
-                    frame_with_zones = add_zone_indicators(frame, env, step, minimap=False)
-                    phase_frames.append(frame_with_zones)
-                
-                action = agent.test_step(obs)
-                obs, reward, done, _ = env.step(action)
-                
-                if done:
-                    obs = env.reset()
-                    
-            except Exception as e:
-                print(f"⚠️ Error in phase {phase}, step {step}: {e}")
-                break
-        
-        all_frames.extend(phase_frames)
-        
-        # Add transition frames (black screen with text)
-        if phase < max(phases_to_test):
-            transition_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            for _ in range(30):  # 1 second transition at 30fps
-                all_frames.append(transition_frame)
+    # Create progress bar for video recording (500 steps per phase + transitions)
+    total_steps = len(phases_to_test) * 500 + (len(phases_to_test) - 1) * 30  # 30 transition frames
     
-    # Save combined video
-    if len(all_frames) > 50:
-        try:
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            imageio.mimsave(save_path, all_frames, fps=30)
-            print(f"🎬 Phase comparison video saved to: {save_path} ({len(all_frames)} frames)")
-        except Exception as e:
-            print(f"❌ Video save error: {e}")
-    else:
-        print(f"⚠️ Not enough frames for phase comparison video")
+    with tqdm(total=total_steps, desc="🎬 Recording Video", unit="frame",
+             bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as video_pbar:
+        
+        for phase in phases_to_test:
+            video_pbar.set_description(f"🎬 Recording {phase_names[phase]}")
+            
+            # Set environment to specific phase using manual override
+            temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
+            env.env.set_manual_progress(temp_progress)
+            
+            # Record this phase
+            phase_frames = []
+            obs = env.reset()
+            
+            # Track swimmer position for trail in this phase
+            phase_position_history = []
+            
+            for step in range(500):  # 500 steps per phase (16+ seconds each)
+                try:
+                    # Track swimmer position
+                    try:
+                        if hasattr(env, 'env') and hasattr(env.env, 'env'):
+                            physics = env.env.env.physics
+                            swimmer_pos = physics.named.data.xpos['head'][:2].copy()
+                            phase_position_history.append(swimmer_pos)
+                            
+                            # Keep trail length reasonable (last 30 steps)
+                            if len(phase_position_history) > 30:
+                                phase_position_history = phase_position_history[-30:]
+                    except:
+                        pass
+                    
+                    frame = env.render(mode='rgb_array')
+                    if frame is not None:
+                        # Use enhanced zone indicators with targets and minimap for phase comparison
+                        frame_with_zones = add_zone_indicators_with_trail(
+                            frame, env, step, phase_position_history, show_minimap=True
+                        )
+                        phase_frames.append(frame_with_zones)
+                    
+                    action = agent.test_step(obs)
+                    obs, reward, done, _ = env.step(action)
+                    
+                    if done:
+                        obs = env.reset()
+                    
+                    # Update progress every 10 frames to avoid spam
+                    if step % 10 == 0:
+                        video_pbar.update(10)
+                        
+                except Exception as e:
+                    print(f"⚠️ Error in phase {phase}, step {step}: {e}")
+                    break
+            
+            # Update for any remaining frames
+            remaining_frames = 500 - (step // 10) * 10
+            if remaining_frames > 0:
+                video_pbar.update(remaining_frames)
+            
+            all_frames.extend(phase_frames)
+            
+            # Add transition frames (black screen with text)
+            if phase < max(phases_to_test):
+                video_pbar.set_description(f"🎬 Adding transition")
+                transition_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                for _ in range(30):  # 1 second transition at 30fps
+                    all_frames.append(transition_frame)
+                video_pbar.update(30)
+    
+        # Save combined video
+        video_pbar.set_description(f"🎬 Saving video file")
+        if len(all_frames) > 50:
+            try:
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                imageio.mimsave(save_path, all_frames, fps=30)
+                print(f"🎬 Phase comparison video saved to: {save_path} ({len(all_frames)} frames)")
+            except Exception as e:
+                print(f"❌ Video save error: {e}")
+        else:
+            print(f"⚠️ Not enough frames for phase comparison video")
 
 
 def save_training_summary(eval_results, training_history, save_path):

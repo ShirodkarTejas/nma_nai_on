@@ -89,18 +89,28 @@ class AdvancedTrainingLogger(TrainingLogger):
     
     def stop_monitoring(self):
         """Stop background hardware monitoring."""
+        print("🖥️ Signaling monitoring thread to stop...")
         self.monitoring_active = False
         if self.monitoring_thread:
-            self.monitoring_thread.join()
+            print("🖥️ Waiting for monitoring thread to finish (may take up to 1 second)...")
+            self.monitoring_thread.join(timeout=2.0)  # Add timeout
+            if self.monitoring_thread.is_alive():
+                print("⚠️ Monitoring thread did not stop gracefully")
+            else:
+                print("✅ Monitoring thread stopped cleanly")
         print("🖥️ Hardware monitoring stopped")
     
     def _monitor_hardware(self):
         """Background thread for hardware monitoring."""
         while self.monitoring_active:
             try:
-                # CPU and memory
-                cpu_percent = psutil.cpu_percent(interval=1)
+                # CPU and memory (use shorter interval for faster shutdown)
+                cpu_percent = psutil.cpu_percent(interval=0.1)  # Reduced from 1.0 to 0.1 seconds
                 memory = psutil.virtual_memory()
+                
+                # Check if we should stop after each metric collection
+                if not self.monitoring_active:
+                    break
                 
                 # GPU metrics if available
                 gpu_metrics = {}
@@ -129,7 +139,11 @@ class AdvancedTrainingLogger(TrainingLogger):
             except Exception as e:
                 print(f"⚠️ Hardware monitoring error: {e}")
             
-            time.sleep(60)  # Monitor every minute
+            # Responsive sleep - check every 0.1 seconds for 60 seconds total
+            for _ in range(600):  # 600 * 0.1 = 60 seconds
+                if not self.monitoring_active:
+                    break
+                time.sleep(0.1)
     
     def _get_gpu_utilization(self):
         """Get GPU utilization percentage (simplified)."""

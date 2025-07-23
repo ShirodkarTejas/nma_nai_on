@@ -1,7 +1,7 @@
 
 === TRAINING SUMMARY REPORT ===
 Experiment: curriculum_ncap_6links
-Duration: 4.65 minutes
+Duration: 5.25 minutes
 Total Episodes: 0
 Total Training Steps: 4
 
@@ -29,8 +29,8 @@ Distances:
 === ADVANCED METRICS ===
 
 Hardware Utilization:
-  - Peak CPU: 51.0%
-  - Peak Memory: 48.6%
+  - Peak CPU: 73.6%
+  - Peak Memory: 39.8%
   - Total Disk Used: 816.7 GB
 
 Training Health:
@@ -44,7 +44,7 @@ Performance Analysis:
 
 ETA Accuracy:
   - ETA Predictions Made: 4
-  - Final ETA: 2025-07-23T13:36:12.747468
+  - Final ETA: 2025-07-23T14:39:09.204600
 
 === RECOMMENDATIONS ===
 - Consider increasing learning rate (very small gradients)

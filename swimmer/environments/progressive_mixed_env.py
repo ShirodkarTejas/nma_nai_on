@@ -2,6 +2,7 @@
 """
 Progressive Mixed Environment for Swimming and Crawling
 Starts with simple swimming physics and gradually introduces land zones.
+Enhanced with goal-directed navigation targets.
 """
 
 import numpy as np
@@ -35,6 +36,12 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         
         # Progressive complexity based on training progress
         self._current_land_zones = self._get_progressive_land_zones()
+        self._current_targets = self._get_progressive_targets()
+        
+        # Goal tracking
+        self._current_target_index = 0
+        self._targets_reached = 0
+        self._target_radius = 1.0  # Distance to consider target "reached"
         
     def _get_progressive_land_zones(self):
         """Get land zones based on training progress."""
@@ -56,6 +63,40 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 {'center': [-2.5, 0], 'radius': 1.0},
                 {'center': [2.5, 0], 'radius': 1.0}
             ]
+    
+    def _get_progressive_targets(self):
+        """Get navigation targets based on training progress."""
+        if self._training_progress < 0.3:
+            # Phase 1: Simple forward movement targets
+            return [
+                {'position': [2.0, 0], 'type': 'swim'},
+                {'position': [4.0, 0], 'type': 'swim'},
+                {'position': [6.0, 0], 'type': 'swim'}
+            ]
+        elif self._training_progress < 0.6:
+            # Phase 2: Navigate to and around single land zone
+            return [
+                {'position': [1.5, 0], 'type': 'swim'},    # Approach land zone
+                {'position': [3.0, 0], 'type': 'land'},    # Enter land zone
+                {'position': [4.5, 0], 'type': 'swim'}     # Exit land zone
+            ]
+        elif self._training_progress < 0.8:
+            # Phase 3: Navigate between two land zones
+            return [
+                {'position': [-2.0, 0], 'type': 'land'},   # First land zone
+                {'position': [0.0, 0], 'type': 'swim'},    # Middle water
+                {'position': [3.0, 0], 'type': 'land'},    # Second land zone
+                {'position': [5.0, 0], 'type': 'swim'}     # Beyond zones
+            ]
+        else:
+            # Phase 4: Complex navigation pattern
+            return [
+                {'position': [-2.5, 0], 'type': 'land'},   # Left land
+                {'position': [0.0, 1.0], 'type': 'swim'},  # North water
+                {'position': [2.5, 0], 'type': 'land'},    # Right land
+                {'position': [0.0, -1.0], 'type': 'swim'}, # South water
+                {'position': [4.0, 0], 'type': 'swim'}     # Final target
+            ]
 
     def initialize_episode(self, physics):
         super().initialize_episode(physics)
@@ -63,6 +104,10 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         physics.named.model.mat_rgba['target', 'a'] = 1
         physics.named.model.mat_rgba['target_default', 'a'] = 1
         physics.named.model.mat_rgba['target_highlight', 'a'] = 1
+        
+        # Reset goal tracking
+        self._current_target_index = 0
+        self._targets_reached = 0
         
         # Set progressive environment properties
         self._update_environment_physics(physics)
@@ -79,17 +124,19 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         
         # Store current land zones for reward calculation
         self._current_land_zones = self._get_progressive_land_zones()
+        self._current_targets = self._get_progressive_targets()
 
     def get_observation(self, physics):
-        """Enhanced observation with environment information."""
+        """Enhanced observation with environment and goal information."""
         obs = collections.OrderedDict()
         obs['joints'] = physics.joints()
         obs['body_velocities'] = physics.body_velocities()
         
+        # Current position
+        head_pos = physics.named.data.xpos['head'][:2]
+        
         # Add environment context based on training progress
         if self._training_progress >= 0.3:
-            head_pos = physics.named.data.xpos['head'][:2]
-            
             # Calculate environment state
             in_water = True
             in_land = False
@@ -108,16 +155,40 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             obs['in_water_zone'] = np.array([1.0 if in_water else 0.0], dtype=np.float32)
             obs['in_land_zone'] = np.array([1.0 if in_land else 0.0], dtype=np.float32)
         
+        # Add goal navigation information
+        if self._current_targets and self._current_target_index < len(self._current_targets):
+            current_target = self._current_targets[self._current_target_index]
+            target_pos = current_target['position']
+            
+            # Distance and direction to current target
+            target_vector = np.array(target_pos) - head_pos
+            distance_to_target = np.linalg.norm(target_vector)
+            direction_to_target = target_vector / (distance_to_target + 1e-6)  # Normalize with small epsilon
+            
+            obs['target_distance'] = np.array([distance_to_target], dtype=np.float32)
+            obs['target_direction'] = direction_to_target.astype(np.float32)
+            obs['target_position'] = np.array(target_pos, dtype=np.float32)
+            obs['target_type'] = np.array([1.0 if current_target['type'] == 'swim' else 0.0], dtype=np.float32)
+            obs['targets_completed'] = np.array([self._targets_reached], dtype=np.float32)
+        else:
+            # No target or all targets completed
+            obs['target_distance'] = np.array([0.0], dtype=np.float32)
+            obs['target_direction'] = np.array([0.0, 0.0], dtype=np.float32)
+            obs['target_position'] = np.array([0.0, 0.0], dtype=np.float32)
+            obs['target_type'] = np.array([1.0], dtype=np.float32)  # Default to swim type
+            obs['targets_completed'] = np.array([len(self._current_targets)], dtype=np.float32)
+        
         return obs
 
     def get_reward(self, physics):
-        """Progressive reward that adapts to training phase."""
+        """Enhanced reward with goal-directed navigation."""
         head_pos = physics.named.data.xpos['head'][:2]
         forward_velocity = -physics.named.data.sensordata['head_vel'][1]
         
+        # Base movement reward
         if self._training_progress < 0.3:
             # Phase 1: Pure swimming reward
-            return rewards.tolerance(
+            base_reward = rewards.tolerance(
                 forward_velocity,
                 bounds=(self._desired_speed, float('inf')),
                 margin=self._desired_speed,
@@ -136,7 +207,6 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             
             if in_land:
                 # Land reward: encourage crawling motion
-                # Reward both forward movement and joint activity
                 joint_activity = np.sum(np.abs(physics.joints()))
                 movement_reward = rewards.tolerance(
                     forward_velocity,
@@ -153,21 +223,78 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     sigmoid='linear',
                 ) * 0.3
                 
-                return movement_reward + activity_reward
+                base_reward = movement_reward + activity_reward
             else:
                 # Water reward: swimming
-                return rewards.tolerance(
+                base_reward = rewards.tolerance(
                     forward_velocity,
                     bounds=(self._desired_speed, float('inf')),
                     margin=self._desired_speed,
                     value_at_margin=0.,
                     sigmoid='linear',
                 )
+        
+        # Goal-directed navigation reward
+        navigation_reward = 0.0
+        
+        if self._current_targets and self._current_target_index < len(self._current_targets):
+            current_target = self._current_targets[self._current_target_index]
+            target_pos = current_target['position']
+            
+            # Distance to target
+            distance_to_target = np.linalg.norm(head_pos - target_pos)
+            
+            # Strong reward for approaching target (inverse distance)
+            approach_reward = 1.0 / (1.0 + distance_to_target)
+            navigation_reward += approach_reward * 0.5
+            
+            # Bonus for reaching target
+            if distance_to_target < self._target_radius:
+                # Target reached!
+                navigation_reward += 2.0  # Large bonus for reaching target
+                
+                # Move to next target
+                self._current_target_index += 1
+                self._targets_reached += 1
+                
+                if self._current_target_index < len(self._current_targets):
+                    print(f"🎯 Target {self._targets_reached} reached! Moving to target {self._current_target_index + 1}")
+                else:
+                    print(f"🏆 All targets completed! ({self._targets_reached} targets)")
+                    navigation_reward += 5.0  # Bonus for completing all targets
+            
+            # Directional reward - encourage movement towards target
+            if distance_to_target > 0.1:  # Avoid division by zero
+                target_direction = (np.array(target_pos) - head_pos) / distance_to_target
+                current_velocity = physics.named.data.sensordata['head_vel'][:2]
+                velocity_magnitude = np.linalg.norm(current_velocity)
+                
+                if velocity_magnitude > 0.01:  # Only if actually moving
+                    velocity_direction = current_velocity / velocity_magnitude
+                    directional_alignment = np.dot(target_direction, velocity_direction)
+                    navigation_reward += directional_alignment * 0.3  # Reward for moving in right direction
+        
+        # Combine rewards
+        total_reward = base_reward + navigation_reward
+        
+        return total_reward
 
     def update_training_progress(self, progress):
         """Update training progress (0.0 to 1.0)."""
+        old_progress = self._training_progress
         self._training_progress = np.clip(progress, 0.0, 1.0)
+        
+        # Check if targets need to be updated
+        old_phase = int(old_progress * 4)
+        new_phase = int(self._training_progress * 4)
+        
+        if new_phase != old_phase:
+            # Reset target tracking for new phase
+            self._current_target_index = 0
+            self._targets_reached = 0
+            
         self._current_land_zones = self._get_progressive_land_zones()
+        self._current_targets = self._get_progressive_targets()
 
 @swimmer.SUITE.add()
 def progressive_swim_crawl(
@@ -322,9 +449,10 @@ class TonicProgressiveMixedWrapper(gym.Env):
         # Start with simple obs, expand as complexity increases
         base_obs_dim = (n_links - 1) + (n_links * 3)  # joints + body velocities
         max_env_features = 5  # viscosity + env_type(2) + zones(2)
+        goal_features = 7  # target_distance(1) + target_direction(2) + target_position(2) + target_type(1) + targets_completed(1)
         time_dim = 1 if time_feature else 0
         
-        total_obs_dim = base_obs_dim + max_env_features + time_dim
+        total_obs_dim = base_obs_dim + max_env_features + goal_features + time_dim
         
         self.observation_space = spaces.Box(
             low=-np.inf,
@@ -387,15 +515,44 @@ class TonicProgressiveMixedWrapper(gym.Env):
                 env_features.extend([obs['in_water_zone'][0], obs['in_land_zone'][0]])
             else:
                 env_features.extend([1.0, 0.0])  # Default: in water
+            
+            # Extract goal-directed features
+            goal_features = []
+            if 'target_distance' in obs:
+                goal_features.extend(obs['target_distance'])
+            else:
+                goal_features.append(0.0)  # No target
+            
+            if 'target_direction' in obs:
+                goal_features.extend(obs['target_direction'])
+            else:
+                goal_features.extend([0.0, 0.0])  # No direction
+            
+            if 'target_position' in obs:
+                goal_features.extend(obs['target_position'])
+            else:
+                goal_features.extend([0.0, 0.0])  # No target position
+            
+            if 'target_type' in obs:
+                goal_features.extend(obs['target_type'])
+            else:
+                goal_features.append(1.0)  # Default to swim type
+            
+            if 'targets_completed' in obs:
+                goal_features.extend(obs['targets_completed'])
+            else:
+                goal_features.append(0.0)  # No targets completed
+                
         else:
             # Handle array format
             n_joints = self.env.action_spec.shape[0]
             joint_pos = obs[:n_joints]
             body_vel = obs[n_joints:n_joints + len(joint_pos) * 3 + 3]
             env_features = [0.001, 1.0, 0.0, 1.0, 0.0]  # Default values
+            goal_features = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]  # Default goal values
         
         # Combine into single observation vector
-        gym_obs = np.concatenate([joint_pos, body_vel, env_features])
+        gym_obs = np.concatenate([joint_pos, body_vel, env_features, goal_features])
         
         # Add time feature if requested
         if self.time_feature:
