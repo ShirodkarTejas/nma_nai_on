@@ -106,18 +106,31 @@ Our NCAP model achieves **high biological authenticity** by directly implementin
 ## 🏗️ Architecture
 
 ### Core Components
-- **NCAP Model**: Biologically-inspired neural circuit with 4 learnable parameters
+- **Biological NCAP Model**: Ultra-lightweight neural circuit with 9 biologically-constrained parameters
 - **Progressive Mixed Environment**: Curriculum from pure swimming to complex swim+crawl
 - **Curriculum Training Framework**: Phase-based learning with automatic progression
 - **Comprehensive Evaluation**: Performance tracking across all training phases
+
+### 🏆 **Model Evolution & Performance**
+
+**Latest Discovery**: Biological adaptation mechanisms significantly outperform artificial memory systems!
+
+| **Model Version** | **Parameters** | **Adaptation Strength** | **Biological Plausibility** | **Status** |
+|------------------|----------------|-------------------------|----------------------------|-----------|
+| Simple NCAP | 4 | None | ⭐⭐⭐⭐ | Legacy |
+| Complex NCAP (LSTM) | 1,418 | 0.0473 | ⭐⭐ | **DEPRECATED** |
+| **Biological NCAP** | **9** | **0.0753 (+59%)** | **⭐⭐⭐⭐⭐** | **ACTIVE** |
+
+**Key Finding**: The biological model achieves **59% stronger environment adaptation** with **99.4% fewer parameters** than LSTM-based approaches. See `MODEL_LEARNINGS.md` for detailed analysis.
 
 ### Project Structure
 ```
 nma_neuroai/
 ├── swimmer/
 │   ├── models/
-│   │   ├── simple_ncap.py           # ✅ Main NCAP implementation (4 parameters)
-│   │   ├── ncap_swimmer.py          # 📚 Original complex NCAP (for comparison)
+│   │   ├── biological_ncap.py       # ✅ ACTIVE: Biological NCAP (9 parameters, no LSTM)
+│   │   ├── simple_ncap.py           # 📚 Legacy: Simple NCAP (4 parameters)
+│   │   ├── ncap_swimmer.py          # ❌ DEPRECATED: Complex NCAP with LSTM (1,418 parameters)
 │   │   └── tonic_ncap.py            # 📚 Tonic wrapper (legacy)
 │   ├── training/
 │   │   ├── curriculum_trainer.py    # ✅ Progressive curriculum training
@@ -134,6 +147,7 @@ nma_neuroai/
 │       ├── training_logger.py       # ✅ Comprehensive training logging
 │       └── helpers.py               # ✅ Utility functions
 ├── tests/                           # ✅ All testing components
+├── MODEL_LEARNINGS.md               # 🧠 Comprehensive model analysis & empirical findings
 ├── outputs/
 │   ├── curriculum_training/         # ✅ Complete curriculum training outputs
 │   │   ├── checkpoints/             # ✅ Training checkpoints (resume from here)
