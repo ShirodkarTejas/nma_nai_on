@@ -243,13 +243,17 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
                 swimmer_screen_y = int((swimmer_pos[1] + 4.0) / y_range * height)
                 
                 if 0 <= swimmer_screen_x < width and 0 <= swimmer_screen_y < height:
-                    # Draw bright indicator around swimmer
-                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 20, (0, 255, 255), 3)  # Cyan circle
-                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 8, (255, 255, 255), -1)  # White center
-                    cv2.putText(frame_with_zones, "SWIMMER", (swimmer_screen_x-30, swimmer_screen_y-25), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
-        except:
-            pass
+                    # Draw bright indicator around swimmer - MUCH more visible
+                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 25, (0, 255, 255), 4)  # Larger cyan circle
+                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 12, (255, 255, 255), -1)  # Larger white center
+                    cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 12, (0, 0, 0), 2)  # Black border for contrast
+                    cv2.putText(frame_with_zones, "SWIMMER", (swimmer_screen_x-35, swimmer_screen_y-30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                    # Add arrow pointing to swimmer for extra visibility
+                    cv2.arrowedLine(frame_with_zones, (swimmer_screen_x-50, swimmer_screen_y-50), 
+                                   (swimmer_screen_x-15, swimmer_screen_y-15), (255, 255, 0), 3, tipLength=0.3)
+        except Exception as e:
+            print(f"⚠️ Swimmer position indicator error: {e}")
         
         # Add training status indicator (dynamic based on training progress)
         if progress < 0.1:  # Less than 10% training progress
