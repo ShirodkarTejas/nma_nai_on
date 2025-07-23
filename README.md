@@ -1,12 +1,16 @@
 # NCAP Swimmer: Biologically-Inspired Neural Control for Adaptive Locomotion
 
-## 🚀 **Current Status - Ready for 1M Episode Training** 
+## 🚀 **Current Status - Enhanced Training & Evaluation System** 
 *Last Updated: 23-07-2025*
 
-### **✅ All Systems Ready**
-- **Curriculum Training**: Progressive 4-phase system tested and validated
+### **✅ All Systems Ready + New Features**
+- **🎯 Target Cycling Fixed**: All navigation targets now cycle properly (not stuck on target 1)
+- **🔄 Resume Training**: Seamless continuation from checkpoints (100k → 200k → 1M)
+- **📊 Evaluation-Only Mode**: Test visualization changes without retraining
+- **🏊 Enhanced Visibility**: Improved swimmer tracking and dynamic training status
 - **Performance Target**: 5-15m distance (2-5 body lengths) for expert swim+crawl
 - **Training Command**: `python main.py --mode train_curriculum --training_steps 1000000`
+- **Resume Command**: `python main.py --mode train_curriculum --training_steps 200000 --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt`
 - **Expected Duration**: 12-24 hours on GPU with checkpoints every 50k steps
 
 ### **🔬 Key Breakthroughs Achieved**
@@ -78,9 +82,15 @@ nma_neuroai/
 │       └── helpers.py               # ✅ Utility functions
 ├── tests/                           # ✅ All testing components
 ├── outputs/
-│   ├── curriculum_checkpoints/      # ✅ Curriculum training checkpoints
-│   ├── improved_mixed_env/          # ✅ Training results and evaluation videos
-│   └── training_logs/               # ✅ Detailed training metrics
+│   ├── curriculum_training/         # ✅ Complete curriculum training outputs
+│   │   ├── checkpoints/             # ✅ Training checkpoints (resume from here)
+│   │   ├── logs/                    # ✅ Detailed training metrics and logs
+│   │   ├── videos/                  # ✅ Training and evaluation videos
+│   │   ├── plots/                   # ✅ Performance plots and trajectory analysis
+│   │   ├── summaries/               # ✅ Training summaries and reports
+│   │   └── models/                  # ✅ Final trained models
+│   ├── improved_mixed_env/          # ✅ Legacy training results
+│   └── training_logs/               # ✅ Legacy logs (other training modes)
 └── main.py                          # ✅ Multi-mode execution with curriculum option
 ```
 
@@ -132,6 +142,27 @@ The environment will automatically detect and use GPU if available.
 ```bash
 # Full curriculum training: swimming → mixed environment
 python main.py --mode train_curriculum --training_steps 1000000 --save_steps 50000 --log_episodes 50
+
+# Shorter validation runs
+python main.py --mode train_curriculum --training_steps 100000 --n_links 5
+```
+
+### 🔄 Resume Training from Checkpoint
+```bash
+# Continue training from where you left off
+python main.py --mode train_curriculum --training_steps 200000 --n_links 5 --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt
+
+# Scale up after validation
+python main.py --mode train_curriculum --training_steps 1000000 --n_links 5 --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt
+```
+
+### 📊 Evaluation-Only Mode (No Training)
+```bash
+# Comprehensive evaluation from checkpoint (perfect for testing visualization changes)
+python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt --n_links 5
+
+# Custom evaluation parameters
+python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt --n_links 5 --eval_episodes 30 --eval_video_steps 600
 ```
 
 **What this does:**
@@ -154,7 +185,10 @@ python main.py --mode train_curriculum --training_steps 1000000 --save_steps 500
 - 🎯 **Zone overlays**: Semi-transparent land zones with labels in videos
 - 🗺️ **Interactive minimap**: Top-right inset showing environment zones, swimmer position, and movement trail
 - 🔍 **Debug information**: Progress percentage and zone count displayed
-- ⚠️ **Model status**: Clear indication when using untrained vs. trained models
+- 🏊 **Enhanced swimmer visibility**: Bright cyan circle, yellow arrow, and "SWIMMER" label for clear position tracking
+- 🎯 **Fixed target cycling**: All navigation targets now cycle properly (not stuck on target 1)
+- 🕒 **Auto-advance targets**: Targets advance automatically after 300 steps if not reached (helps untrained models)
+- 🏷️ **Dynamic training status**: Label changes from "UNTRAINED MODEL" → "TRAINING IN PROGRESS" → "TRAINED MODEL"
 - 🎮 **Reduced motion artifacts**: Action clamping for smoother untrained model visualization
 - 📈 **Research-quality plots**: Trajectory analysis similar to scientific publications with zone circles
 
@@ -187,6 +221,102 @@ python main.py --mode train_improved --training_steps 30000 --save_steps 10000 -
 # Evaluate trained curriculum model
 python main.py --mode evaluate --load_model outputs/curriculum_final_model_5links.pt
 ```
+
+## 🆕 Recent Improvements & Features
+
+### 🎯 **Target Cycling Fixes**
+- **Problem Solved**: Previously only the first target would flash/be active
+- **Root Cause**: Untrained swimmers couldn't reach targets within 1.0m radius
+- **Solution**: Larger target radius (2.0m) + auto-advance timer (300 steps)
+- **Result**: All targets now cycle properly in all training phases
+
+### 🏊 **Enhanced Swimmer Visibility**
+- **Larger cyan circle** (25px radius) around swimmer position
+- **Yellow arrow** pointing directly to swimmer for easy tracking
+- **"SWIMMER" label** with enhanced visibility
+- **Black borders** for better contrast against backgrounds
+- **Error reporting** for debugging position issues
+
+### 🔄 **Checkpoint & Resume System**
+- **Auto-saves** every 50k steps to `outputs/curriculum_training/checkpoints/`
+- **Seamless resuming** from any checkpoint without data loss
+- **Comprehensive state** preservation (model, phase rewards, distances, training progress)
+- **Flexible continuation** (100k → 200k → 1M as needed)
+
+### 📊 **Evaluation-Only Mode**
+- **No training required** - just analysis and visualization
+- **Perfect for testing** visualization changes without retraining
+- **Comprehensive outputs**: videos, plots, trajectory analysis, summaries
+- **Customizable parameters**: episode count, video length
+- **Multiple video formats**: phase comparison + individual phase videos
+
+### 🏷️ **Dynamic Training Status**
+- **Color-coded status indicator** in videos:
+  - 🔴 **"UNTRAINED MODEL"** (0-10% progress)
+  - 🟡 **"TRAINING IN PROGRESS"** (10-50% progress)  
+  - 🟢 **"TRAINED MODEL"** (50%+ progress)
+- **Real-time updates** based on actual training progress
+
+### 🎬 **Video Library Outputs**
+**Training Mode:**
+- `curriculum_video_step_X.mp4` - Intermediate progress videos
+- `curriculum_final_video.mp4` - Complete phase comparison
+
+**Evaluation Mode:**
+- `evaluation_phase_comparison.mp4` - All phases in one video
+- `evaluation_phase_0_pure_swimming.mp4` - Phase 1 detailed analysis
+- `evaluation_phase_1_single_land_zone.mp4` - Phase 2 detailed analysis
+- `evaluation_phase_2_two_land_zones.mp4` - Phase 3 detailed analysis  
+- `evaluation_phase_3_full_complexity.mp4` - Phase 4 detailed analysis
+
+### ⚙️ **Command Line Options**
+```bash
+# Resume training options
+--resume_checkpoint PATH    # Path to checkpoint file
+--training_steps N          # New total target (not additional steps)
+
+# Evaluation options  
+--eval_episodes N          # Episodes per phase (default: 20)
+--eval_video_steps N       # Video length in steps (default: 400)
+```
+
+## 🎯 **Example Workflow**
+
+### **Typical Training & Analysis Pipeline**
+```bash
+# 1. Start with validation training
+python main.py --mode train_curriculum --training_steps 100000 --n_links 5
+
+# 2. Evaluate the 100k results  
+python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt --n_links 5
+
+# 3. If satisfied, continue to 200k
+python main.py --mode train_curriculum --training_steps 200000 --n_links 5 --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt
+
+# 4. Scale up to full 1M training
+python main.py --mode train_curriculum --training_steps 1000000 --n_links 5 --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_200000.pt
+
+# 5. Final comprehensive analysis
+python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_1000000.pt --n_links 5 --eval_episodes 50 --eval_video_steps 800
+```
+
+### **Testing Visualization Changes**
+```bash
+# Make code changes to visualization...
+
+# Test immediately without retraining
+python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt --n_links 5 --eval_episodes 10 --eval_video_steps 300
+
+# Quick turnaround for iterative improvements
+```
+
+### **Checkpoint Locations**
+- **Checkpoints**: `outputs/curriculum_training/checkpoints/checkpoint_step_X.pt`
+- **Training Logs**: `outputs/curriculum_training/logs/`
+- **Videos**: `outputs/curriculum_training/videos/`
+- **Plots**: `outputs/curriculum_training/plots/`  
+- **Summaries**: `outputs/curriculum_training/summaries/`
+- **Models**: `outputs/curriculum_training/models/`
 
 ## 🔬 Key Research Discoveries
 

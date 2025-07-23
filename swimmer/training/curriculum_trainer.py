@@ -49,7 +49,8 @@ class CurriculumNCAPTrainer:
                  oscillator_period=60,
                  min_oscillator_strength=1.2,
                  min_coupling_strength=0.8,
-                 biological_constraint_frequency=5000):  # Every 5k steps
+                 biological_constraint_frequency=5000,  # Every 5k steps
+                 resume_from_checkpoint=None):  # Path to checkpoint to resume from
         
         self.n_links = n_links
         self.learning_rate = learning_rate
@@ -61,6 +62,7 @@ class CurriculumNCAPTrainer:
         self.min_oscillator_strength = min_oscillator_strength
         self.min_coupling_strength = min_coupling_strength
         self.biological_constraint_frequency = biological_constraint_frequency
+        self.resume_from_checkpoint = resume_from_checkpoint
         
         # Training state
         self.current_step = 0
@@ -70,10 +72,16 @@ class CurriculumNCAPTrainer:
         
         # Initialize components with advanced logging if available
         if ADVANCED_LOGGING_AVAILABLE:
-            self.logger = AdvancedTrainingLogger(experiment_name=f"curriculum_ncap_{n_links}links")
+            self.logger = AdvancedTrainingLogger(
+                log_dir="outputs/curriculum_training/logs", 
+                experiment_name=f"curriculum_ncap_{n_links}links"
+            )
             print("🔬 Using advanced logging with hardware monitoring")
         else:
-            self.logger = TrainingLogger(f"curriculum_ncap_{n_links}links")
+            self.logger = TrainingLogger(
+                log_dir="outputs/curriculum_training/logs",
+                experiment_name=f"curriculum_ncap_{n_links}links"
+            )
             print("📊 Using standard logging")
         
         print(f"🎓 Initialized Curriculum NCAP Trainer")
@@ -154,6 +162,65 @@ class CurriculumNCAPTrainer:
         print(f"🤖 Created simplified NCAP agent for curriculum learning")
         
         return agent, model
+    
+    def save_checkpoint(self, model, step, eval_results=None):
+        """Save training checkpoint."""
+        checkpoint_dir = f"outputs/curriculum_training/checkpoints"
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_step_{step}.pt")
+        
+        checkpoint_data = {
+            'model_state_dict': model.state_dict(),
+            'current_step': self.current_step,
+            'current_episode': self.current_episode,
+            'phase_rewards': self.phase_rewards,
+            'phase_distances': self.phase_distances,
+            'training_config': {
+                'n_links': self.n_links,
+                'learning_rate': self.learning_rate,
+                'training_steps': self.training_steps,
+                'oscillator_period': self.oscillator_period,
+                'min_oscillator_strength': self.min_oscillator_strength,
+                'min_coupling_strength': self.min_coupling_strength,
+                'biological_constraint_frequency': self.biological_constraint_frequency,
+            },
+            'eval_results': eval_results,
+        }
+        
+        torch.save(checkpoint_data, checkpoint_path)
+        print(f"💾 Checkpoint saved: {checkpoint_path}")
+        return checkpoint_path
+    
+    def load_checkpoint(self, model, checkpoint_path):
+        """Load training checkpoint with backward compatibility."""
+        print(f"📂 Loading checkpoint: {checkpoint_path}")
+        
+        checkpoint_data = torch.load(checkpoint_path, map_location=self.device)
+        
+        # Load model state
+        model.load_state_dict(checkpoint_data['model_state_dict'])
+        
+        # Load training state with backward compatibility
+        if 'current_step' in checkpoint_data:
+            # New checkpoint format
+            self.current_step = checkpoint_data['current_step']
+            self.current_episode = checkpoint_data['current_episode']
+            self.phase_rewards = checkpoint_data.get('phase_rewards', {0: [], 1: [], 2: [], 3: []})
+            self.phase_distances = checkpoint_data.get('phase_distances', {0: [], 1: [], 2: [], 3: []})
+        else:
+            # Old checkpoint format (legacy compatibility)
+            self.current_step = checkpoint_data.get('step', 0)
+            self.current_episode = checkpoint_data.get('episode', 0)
+            self.phase_rewards = {0: [], 1: [], 2: [], 3: []}  # Reset for old checkpoints
+            self.phase_distances = {0: [], 1: [], 2: [], 3: []}
+            print("⚠️ Legacy checkpoint format detected - phase history reset")
+        
+        print(f"✅ Checkpoint loaded successfully!")
+        print(f"   Resuming from step: {self.current_step:,}")
+        print(f"   Episode: {self.current_episode:,}")
+        
+        return checkpoint_data.get('eval_results', {})
     
     def apply_biological_constraints(self, model):
         """Apply biological constraints to maintain realism."""
@@ -259,6 +326,10 @@ class CurriculumNCAPTrainer:
         env = self.create_environment()
         model = self.create_model()
         agent, tonic_model = self.create_agent(model, env)
+        
+        # Load checkpoint if resuming
+        if self.resume_from_checkpoint:
+            self.load_checkpoint(tonic_model, self.resume_from_checkpoint)
         
         # Training loop with advanced monitoring
         start_time = time.time()
@@ -393,16 +464,8 @@ class CurriculumNCAPTrainer:
             if self.current_step % self.save_steps == 0:
                 tqdm.write(f"\n💾 Checkpoint at step {self.current_step:,}")
                 
-                # Save model
-                checkpoint_path = f"outputs/curriculum_checkpoints/step_{self.current_step}.pt"
-                os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-                torch.save({
-                    'model_state_dict': model.state_dict(),
-                    'step': self.current_step,
-                    'episode': self.current_episode,
-                    'phase': current_phase,
-                    'progress': progress,
-                }, checkpoint_path)
+                # Save comprehensive checkpoint
+                checkpoint_path = self.save_checkpoint(tonic_model, self.current_step, eval_results)
                 
                 # Comprehensive evaluation
                 eval_results = self.evaluate_performance(agent, env, num_episodes=10)
@@ -590,4 +653,128 @@ class CurriculumNCAPTrainer:
                 pbar.update(1)  # Skip if not available
         
         env.close()
-        return model, final_eval 
+        return model, final_eval
+    
+    def evaluate_only(self, eval_episodes=20, video_steps=400):
+        """Run evaluation and visualization only (no training) from a checkpoint."""
+        print(f"\n📊 Starting Curriculum Evaluation (No Training)")
+        print(f"   Checkpoint: {self.resume_from_checkpoint}")
+        print(f"   Links: {self.n_links}")
+        print(f"   Episodes per phase: {eval_episodes}")
+        print(f"   Video length: {video_steps} steps")
+        
+        # Create environment and model
+        env = self.create_environment()
+        model = self.create_model()
+        agent, tonic_model = self.create_agent(model, env)
+        
+        # Load checkpoint
+        if self.resume_from_checkpoint:
+            checkpoint_results = self.load_checkpoint(tonic_model, self.resume_from_checkpoint)
+        else:
+            print("⛔ No checkpoint provided for evaluation!")
+            return
+        
+        start_time = time.time()
+        
+        print(f"\n🔬 Running comprehensive evaluation across all phases...")
+        total_eval_episodes = eval_episodes * 4  # 4 phases
+        with tqdm(total=total_eval_episodes, desc="🔬 Evaluation", unit="episode",
+                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as eval_pbar:
+            final_eval = self.evaluate_performance(agent, env, num_episodes=eval_episodes, progress_bar=eval_pbar)
+        
+        print(f"\n📊 Performance Summary:")
+        phase_names_final = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+        for phase, results in final_eval.items():
+            print(f"   {phase_names_final[phase]}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
+        
+        print(f"\n🎨 Creating comprehensive visualizations...")
+        with tqdm(total=8, desc="📊 Creating Visualizations", unit="task",
+                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as vis_pbar:
+            
+            # Training plots
+            vis_pbar.set_description("📊 Creating final training plots")
+            create_curriculum_plots(
+                phase_rewards=self.phase_rewards,
+                phase_distances=self.phase_distances,
+                eval_results=final_eval,
+                save_path="outputs/curriculum_training/plots/evaluation_final_plots.png"
+            )
+            vis_pbar.update(1)
+            print(f"✅ Training plots saved to: outputs/curriculum_training/plots/evaluation_final_plots.png")
+            
+            # Trajectory analysis for each phase
+            final_trajectory_stats = {}
+            phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+            
+            for phase in range(4):
+                vis_pbar.set_description(f"📊 Analyzing {phase_names[phase]}")
+                
+                # Set environment to specific phase
+                env.env.set_manual_progress((phase + 0.5) * 0.25)  # Middle of each phase
+                
+                trajectory_stats = create_trajectory_analysis(
+                    agent=agent,
+                    env=env,
+                    save_path=f"outputs/curriculum_training/plots/evaluation_trajectory_phase_{phase}.png",
+                    num_steps=video_steps,
+                    phase_name=f"Evaluation - {phase_names[phase]}"
+                )
+                
+                final_trajectory_stats[phase] = trajectory_stats
+                vis_pbar.update(1)
+                print(f"   ✅ {phase_names[phase]}: {trajectory_stats['final_distance']:.3f}m, {trajectory_stats['transitions']} transitions")
+            
+            # Phase comparison video
+            vis_pbar.set_description("🎬 Creating phase comparison video")
+            final_video_path = f"outputs/curriculum_training/videos/evaluation_phase_comparison.mp4"
+            create_phase_comparison_video(
+                agent=agent,
+                env=env,
+                save_path=final_video_path,
+                phases_to_test=[0, 1, 2, 3]
+            )
+            vis_pbar.update(1)
+            print(f"✅ Phase comparison video: {final_video_path}")
+            
+            # Individual test videos for each phase
+            for phase in range(4):
+                vis_pbar.set_description(f"🎬 Creating {phase_names[phase]} video")
+                
+                # Set environment to specific phase
+                env.env.set_manual_progress((phase + 0.5) * 0.25)
+                
+                video_path = f"outputs/curriculum_training/videos/evaluation_phase_{phase}_{phase_names[phase].lower().replace(' ', '_')}.mp4"
+                create_test_video(
+                    agent=agent,
+                    env=env,
+                    save_path=video_path,
+                    num_steps=video_steps,
+                    episode_name=f"Evaluation - {phase_names[phase]}"
+                )
+                print(f"   ✅ {phase_names[phase]} video: {video_path}")
+            vis_pbar.update(1)
+            
+            # Training summary
+            vis_pbar.set_description("📄 Generating evaluation summary")
+            summary_path = f"outputs/curriculum_training/summaries/evaluation_summary.md"
+            save_training_summary(
+                eval_results=final_eval,
+                training_history={
+                    'phase_rewards': self.phase_rewards,
+                    'phase_distances': self.phase_distances,
+                    'trajectory_stats': final_trajectory_stats,
+                },
+                save_path=summary_path
+            )
+            vis_pbar.update(1)
+            print(f"✅ Evaluation summary: {summary_path}")
+        
+        total_time = time.time() - start_time
+        print(f"\n🏁 Evaluation Complete!")
+        print(f"   Total time: {total_time/60:.1f} minutes")
+        print(f"   Step: {self.current_step:,}")
+        print(f"   Episode: {self.current_episode:,}")
+        
+        env.close()
+        return final_eval 

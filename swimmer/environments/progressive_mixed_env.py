@@ -41,7 +41,8 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         # Goal tracking
         self._current_target_index = 0
         self._targets_reached = 0
-        self._target_radius = 1.0  # Distance to consider target "reached"
+        self._target_radius = 2.0  # Distance to consider target "reached" (larger for untrained swimmers)
+        self._target_visit_timer = 0  # Auto-advance targets if swimmer gets stuck
         
     def _get_progressive_land_zones(self):
         """Get land zones based on training progress."""
@@ -108,6 +109,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         # Reset goal tracking
         self._current_target_index = 0
         self._targets_reached = 0
+        self._target_visit_timer = 0
         
         # Set progressive environment properties
         self._update_environment_physics(physics)
@@ -248,20 +250,38 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             approach_reward = 1.0 / (1.0 + distance_to_target)
             navigation_reward += approach_reward * 0.5
             
-            # Bonus for reaching target
-            if distance_to_target < self._target_radius:
-                # Target reached!
-                navigation_reward += 2.0  # Large bonus for reaching target
+            # Increment visit timer for auto-advance
+            self._target_visit_timer += 1
+            
+            # Check for target completion (either reached or time limit)
+            target_reached = distance_to_target < self._target_radius
+            time_limit_reached = self._target_visit_timer > 300  # Auto-advance after 300 steps (~10 seconds)
+            
+            if target_reached or time_limit_reached:
+                if target_reached:
+                    navigation_reward += 2.0  # Large bonus for actually reaching target
+                    # Only log occasionally to reduce spam
+                    if self._targets_reached % 10 == 0:  # Log every 10th target reached
+                        print(f"🎯 Target {self._targets_reached + 1} reached! Distance: {distance_to_target:.2f}m")
+                else:
+                    navigation_reward += 0.5  # Smaller bonus for time-based advance
+                    # Only log occasionally to reduce spam
+                    if self._targets_reached % 20 == 0:  # Log every 20th auto-advance
+                        print(f"⏰ Target {self._targets_reached + 1} auto-advanced after {self._target_visit_timer} steps")
                 
                 # Move to next target
                 self._current_target_index += 1
                 self._targets_reached += 1
+                self._target_visit_timer = 0  # Reset timer
                 
-                if self._current_target_index < len(self._current_targets):
-                    print(f"🎯 Target {self._targets_reached} reached! Moving to target {self._current_target_index + 1}")
-                else:
-                    print(f"🏆 All targets completed! ({self._targets_reached} targets)")
+                # Only log phase completion, not every target transition
+                if self._current_target_index >= len(self._current_targets):
+                    # Completed all targets in this phase
+                    if self._targets_reached % 50 == 0:  # Log every 50 completions
+                        print(f"🏆 Phase targets completed! ({self._targets_reached} total targets)")
                     navigation_reward += 5.0  # Bonus for completing all targets
+                    # Reset to first target for continuous cycling
+                    self._current_target_index = 0
             
             # Directional reward - encourage movement towards target
             if distance_to_target > 0.1:  # Avoid division by zero
@@ -292,6 +312,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             # Reset target tracking for new phase
             self._current_target_index = 0
             self._targets_reached = 0
+            self._target_visit_timer = 0
             
         self._current_land_zones = self._get_progressive_land_zones()
         self._current_targets = self._get_progressive_targets()

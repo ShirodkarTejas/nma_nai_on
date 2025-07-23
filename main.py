@@ -9,8 +9,8 @@ from swimmer.training import ImprovedNCAPTrainer
 
 def main():
     parser = argparse.ArgumentParser(description='Improved Mixed Environment Swimmer')
-    parser.add_argument('--mode', choices=['train_improved', 'train_biological', 'train_curriculum', 'evaluate'], default='train_improved',
-                       help='Mode to run: train_improved (stable NCAP), train_biological (preserve biology), train_curriculum (progressive swim+crawl), or evaluate')
+    parser.add_argument('--mode', choices=['train_improved', 'train_biological', 'train_curriculum', 'evaluate', 'evaluate_curriculum'], default='train_improved',
+                       help='Mode to run: train_improved (stable NCAP), train_biological (preserve biology), train_curriculum (progressive swim+crawl), evaluate, or evaluate_curriculum (eval only)')
     parser.add_argument('--model', choices=['ncap', 'mlp'], default='ncap',
                        help='Model type to use')
     parser.add_argument('--algorithm', choices=['ppo', 'a2c'], default='ppo',
@@ -25,6 +25,12 @@ def main():
                        help='Episodes between progress logs')
     parser.add_argument('--load_model', type=str, default=None,
                        help='Path to load a trained model')
+    parser.add_argument('--resume_checkpoint', type=str, default=None,
+                       help='Path to checkpoint to resume curriculum training from')
+    parser.add_argument('--eval_episodes', type=int, default=20,
+                       help='Number of episodes per phase for evaluation')
+    parser.add_argument('--eval_video_steps', type=int, default=400,
+                       help='Number of steps per video for evaluation')
     
     args = parser.parse_args()
     
@@ -54,9 +60,25 @@ def main():
             learning_rate=3e-5,  # Conservative learning rate for long training
             training_steps=args.training_steps,
             save_steps=args.save_steps,
-            log_episodes=args.log_episodes
+            log_episodes=args.log_episodes,
+            resume_from_checkpoint=args.resume_checkpoint
         )
         trainer.train()
+    elif args.mode == 'evaluate_curriculum':
+        if args.resume_checkpoint is None:
+            print("⛔  --resume_checkpoint is required for curriculum evaluation"); return
+        
+        print("📊 Starting curriculum evaluation from checkpoint...")
+        from swimmer.training.curriculum_trainer import CurriculumNCAPTrainer
+        trainer = CurriculumNCAPTrainer(
+            n_links=args.n_links,
+            training_steps=0,  # No training
+            resume_from_checkpoint=args.resume_checkpoint
+        )
+        trainer.evaluate_only(
+            eval_episodes=args.eval_episodes,
+            video_steps=args.eval_video_steps
+        )
     elif args.mode == 'evaluate':
         if args.load_model is None:
             print("⛔  --load_model is required for evaluation"); return
