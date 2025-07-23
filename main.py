@@ -31,6 +31,8 @@ def main():
                        help='Number of episodes per phase for evaluation')
     parser.add_argument('--eval_video_steps', type=int, default=400,
                        help='Number of steps per video for evaluation')
+    parser.add_argument('--model_type', choices=['biological_ncap', 'enhanced_ncap'], default='enhanced_ncap',
+                       help='NCAP model type for curriculum training')
     
     args = parser.parse_args()
     
@@ -61,7 +63,9 @@ def main():
             training_steps=args.training_steps,
             save_steps=args.save_steps,
             log_episodes=args.log_episodes,
-            resume_from_checkpoint=args.resume_checkpoint
+            resume_from_checkpoint=args.resume_checkpoint,
+            model_type=args.model_type,
+            algorithm=args.algorithm
         )
         trainer.train()
     elif args.mode == 'evaluate_curriculum':
@@ -73,7 +77,9 @@ def main():
         trainer = CurriculumNCAPTrainer(
             n_links=args.n_links,
             training_steps=0,  # No training
-            resume_from_checkpoint=args.resume_checkpoint
+            resume_from_checkpoint=args.resume_checkpoint,
+            model_type=args.model_type,
+            algorithm=args.algorithm
         )
         trainer.evaluate_only(
             eval_episodes=args.eval_episodes,

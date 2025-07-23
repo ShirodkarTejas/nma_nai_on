@@ -16,9 +16,11 @@ from tqdm import tqdm
 # Suppress the harmless gym Box precision warning
 warnings.filterwarnings("ignore", message=".*Box bound precision lowered by casting to.*")
 from ..models.biological_ncap import BiologicalNCAPSwimmer, BiologicalNCAPActor
+from ..models.enhanced_biological_ncap import EnhancedBiologicalNCAPSwimmer
 from ..environments.progressive_mixed_env import TonicProgressiveMixedWrapper
 from ..utils.training_logger import TrainingLogger
 from ..utils.curriculum_visualization import create_curriculum_plots, create_test_video, create_phase_comparison_video, save_training_summary, create_trajectory_analysis
+from ..utils.artifact_naming import ArtifactNamer, detect_model_type
 
 try:
     from ..utils.advanced_logger import AdvancedTrainingLogger
@@ -57,7 +59,9 @@ class CurriculumNCAPTrainer:
                  min_oscillator_strength=1.2,
                  min_coupling_strength=0.8,
                  biological_constraint_frequency=5000,  # Every 5k steps
-                 resume_from_checkpoint=None):  # Path to checkpoint to resume from
+                 resume_from_checkpoint=None,  # Path to checkpoint to resume from
+                 model_type='enhanced_ncap',  # Model type: biological_ncap, enhanced_ncap
+                 algorithm='ppo'):  # Algorithm for naming
         
         self.n_links = n_links
         self.learning_rate = learning_rate
@@ -70,6 +74,19 @@ class CurriculumNCAPTrainer:
         self.min_coupling_strength = min_coupling_strength
         self.biological_constraint_frequency = biological_constraint_frequency
         self.resume_from_checkpoint = resume_from_checkpoint
+        self.model_type = model_type
+        self.algorithm = algorithm
+        
+        # Initialize artifact namer for consistent naming across all outputs
+        self.artifact_namer = ArtifactNamer(
+            model_type=model_type,
+            n_links=n_links,
+            algorithm=algorithm,
+            additional_config={
+                'oscillator_period': oscillator_period,
+                'training_mode': 'curriculum'
+            }
+        )
         
         # Training state
         self.current_step = 0
@@ -78,22 +95,28 @@ class CurriculumNCAPTrainer:
         self.phase_distances = {0: [], 1: [], 2: [], 3: []}
         
         # Initialize components with advanced logging if available
+        log_dir = os.path.dirname(self.artifact_namer.training_log_dir())
+        experiment_name = self.artifact_namer.base_id
+        
         if ADVANCED_LOGGING_AVAILABLE:
             self.logger = AdvancedTrainingLogger(
-                log_dir="outputs/curriculum_training/logs", 
-                experiment_name=f"curriculum_ncap_{n_links}links"
+                log_dir=log_dir, 
+                experiment_name=experiment_name
             )
             print("🔬 Using advanced logging with hardware monitoring")
         else:
             self.logger = TrainingLogger(
-                log_dir="outputs/curriculum_training/logs",
-                experiment_name=f"curriculum_ncap_{n_links}links"
+                log_dir=log_dir,
+                experiment_name=experiment_name
             )
             print("📊 Using standard logging")
         
-        print(f"🎓 Initialized Curriculum NCAP Trainer")
+        print(f"🎓 Initialized Curriculum {model_type.upper()} Trainer")
+        print(f"   Model: {model_type} with {n_links} links")
+        print(f"   Algorithm: {algorithm}")
         print(f"   Device: {device}")
         print(f"   Total training: {training_steps:,} steps")
+        print(f"   Artifact ID: {self.artifact_namer.base_id}")
         print(f"   Phase progression:")
         print(f"     Phase 1 (0-30%): Pure swimming")
         print(f"     Phase 2 (30-60%): Single land zone")
@@ -116,15 +139,36 @@ class CurriculumNCAPTrainer:
         return env
     
     def create_model(self):
-        """Create Biological NCAP model optimized for curriculum learning."""
-        model = BiologicalNCAPSwimmer(
-            n_joints=self.n_links - 1,  # 4 joints for 5-link swimmer
-            oscillator_period=self.oscillator_period,
-            include_environment_adaptation=True  # Enable biological adaptation
-        ).to(self.device)
+        """Create NCAP model optimized for curriculum learning based on model_type."""
+        n_joints = self.n_links - 1  # 4 joints for 5-link swimmer
         
-        print(f"🧬 Created Biological NCAP model with {sum(p.numel() for p in model.parameters())} parameters")
-        print(f"🔬 Biological adaptation: ENABLED (no LSTM - pure neuromodulation)")
+        if self.model_type == 'enhanced_ncap':
+            model = EnhancedBiologicalNCAPSwimmer(
+                n_joints=n_joints,
+                oscillator_period=self.oscillator_period,
+                include_environment_adaptation=True,  # Dramatic frequency adaptation
+                include_goal_direction=True  # Goal-directed navigation with anti-tail-chasing fixes
+            ).to(self.device)
+            
+            print(f"🚀 Created ENHANCED Biological NCAP model with {sum(p.numel() for p in model.parameters())} parameters")
+            print(f"🔬 Relaxation oscillator: Asymmetric (60/40 phase) with 5x frequency adaptation")
+            print(f"🎯 Goal-directed navigation: Target-seeking with anti-tail-chasing fixes")
+            print(f"📄 Based on C. elegans research: https://elifesciences.org/articles/69905")
+            
+        elif self.model_type == 'biological_ncap':
+            model = BiologicalNCAPSwimmer(
+                n_joints=n_joints,
+                oscillator_period=self.oscillator_period,
+                include_environment_adaptation=True  # Enable biological adaptation
+            ).to(self.device)
+            
+            print(f"🧬 Created standard Biological NCAP model with {sum(p.numel() for p in model.parameters())} parameters")
+            print(f"🔬 Biological adaptation: ENABLED (no LSTM - pure neuromodulation)")
+            
+        else:
+            raise ValueError(f"Unsupported model type: {self.model_type}. "
+                           f"Supported: 'biological_ncap', 'enhanced_ncap'")
+        
         return model
     
     def create_agent(self, model, env):
@@ -146,9 +190,10 @@ class CurriculumNCAPTrainer:
                 # Get device from model parameters
                 device = next(self.ncap_model.parameters()).device
                 
-                # Extract joint positions and environment info from observation
+                # Extract joint positions, environment info, and target info from observation
                 if isinstance(obs, dict):
                     joint_pos = torch.tensor(obs['joints'], dtype=torch.float32, device=device)
+                    
                     # Extract environment information for biological adaptation
                     environment_type = None
                     if 'environment_type' in obs and 'fluid_viscosity' in obs:
@@ -157,17 +202,40 @@ class CurriculumNCAPTrainer:
                         # Normalize viscosity for biological model
                         vis_norm = np.clip((np.log10(viscosity) - np.log10(1e-4)) / (np.log10(1.5) - np.log10(1e-4)), 0.0, 1.0)
                         environment_type = np.array([env_flags[0], env_flags[1], vis_norm], dtype=np.float32)
+                    
+                    # **NEW**: Extract target information for goal-directed navigation
+                    target_direction = None
+                    if hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
+                        if 'target_direction' in obs:
+                            target_direction = obs['target_direction']
+                        elif 'target_position' in obs:
+                            # Use target position as direction (simplified)
+                            target_pos = obs['target_position']
+                            target_norm = np.linalg.norm(target_pos)
+                            if target_norm > 0.1:  # Valid target
+                                target_direction = target_pos / target_norm
                 else:
                     joint_pos = torch.tensor(obs[:4], dtype=torch.float32, device=device)
                     environment_type = None
+                    target_direction = None
                 
-                # Get NCAP action with biological adaptation
+                # Get NCAP action with biological adaptation and goal-directed navigation
                 with torch.no_grad():
-                    action = self.ncap_model(
-                        joint_pos, 
-                        environment_type=environment_type,
-                        timesteps=torch.tensor([self.step_count], device=device)
-                    )
+                    if hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
+                        # Enhanced NCAP with goal-directed navigation
+                        action = self.ncap_model(
+                            joint_pos, 
+                            environment_type=environment_type,
+                            target_direction=target_direction,
+                            timesteps=torch.tensor([self.step_count], device=device)
+                        )
+                    else:
+                        # Standard biological NCAP
+                        action = self.ncap_model(
+                            joint_pos, 
+                            environment_type=environment_type,
+                            timesteps=torch.tensor([self.step_count], device=device)
+                        )
                     self.step_count += 1
                     
                     # For untrained models, reduce action magnitude to prevent erratic motion
@@ -183,11 +251,11 @@ class CurriculumNCAPTrainer:
         return agent, model
     
     def save_checkpoint(self, model, step, eval_results=None):
-        """Save training checkpoint."""
-        checkpoint_dir = f"outputs/curriculum_training/checkpoints"
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        
-        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_step_{step}.pt")
+        """Save training checkpoint with model-specific naming."""
+        checkpoint_path = self.artifact_namer.checkpoint_name(
+            step=step, 
+            base_dir="outputs/curriculum_training/checkpoints"
+        )
         
         checkpoint_data = {
             'model_state_dict': model.state_dict(),
@@ -348,7 +416,7 @@ class CurriculumNCAPTrainer:
         print(f"   Target: {self.training_steps:,} steps")
         print(f"   Biological constraints every {self.biological_constraint_frequency:,} steps")
         
-        # Create environment and model
+        # Create environment and model based on model_type
         env = self.create_environment()
         model = self.create_model()
         agent, tonic_model = self.create_agent(model, env)
@@ -514,7 +582,11 @@ class CurriculumNCAPTrainer:
                 
                 # Create visualizations
                 if self.current_step >= 50000:  # After some training
-                    plot_path = f"outputs/curriculum_training/plots/curriculum_plots_step_{self.current_step}.png"
+                    plot_path = self.artifact_namer.analysis_plot_name(
+                        "curriculum_progress", 
+                        step=self.current_step,
+                        base_dir="outputs/curriculum_training/plots"
+                    )
                     create_curriculum_plots(
                         phase_rewards=self.phase_rewards,
                         phase_distances=self.phase_distances,
@@ -523,9 +595,14 @@ class CurriculumNCAPTrainer:
                     )
                 
                 # Create trajectory analysis
-                trajectory_path = f"outputs/curriculum_training/plots/trajectory_analysis_step_{self.current_step}.png"
                 current_phase = min(int(self.current_step / (self.training_steps / 4)), 3)
                 phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+                trajectory_path = self.artifact_namer.analysis_plot_name(
+                    "trajectory_analysis", 
+                    step=self.current_step,
+                    phase=f"phase{current_phase}",
+                    base_dir="outputs/curriculum_training/plots"
+                )
                 
                 trajectory_stats = create_trajectory_analysis(
                     agent=agent,
@@ -540,7 +617,11 @@ class CurriculumNCAPTrainer:
                           f"transitions={trajectory_stats['transitions']}")
                 
                 # Create test video
-                video_path = f"outputs/curriculum_training/videos/curriculum_video_step_{self.current_step}.mp4"
+                video_path = self.artifact_namer.training_video_name(
+                    step=self.current_step,
+                    phase=f"phase{current_phase}",
+                    base_dir="outputs/curriculum_training/videos"
+                )
                 create_test_video(
                     agent=agent,
                     env=env,
@@ -575,9 +656,9 @@ class CurriculumNCAPTrainer:
             tqdm.write(f"   {phase_names_final[phase]}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
         
         # Save final model
-        models_dir = f"outputs/curriculum_training/models"
-        os.makedirs(models_dir, exist_ok=True)
-        final_path = f"{models_dir}/curriculum_final_model_{self.n_links}links.pt"
+        final_path = self.artifact_namer.final_model_name(
+            base_dir="outputs/curriculum_training/models"
+        )
         torch.save({
             'model_state_dict': model.state_dict(),
             'final_evaluation': final_eval,
@@ -609,7 +690,10 @@ class CurriculumNCAPTrainer:
             
             # Final training plots
             pbar.set_description("📊 Creating training plots")
-            final_plot_path = f"outputs/curriculum_training/plots/curriculum_final_plots.png"
+            final_plot_path = self.artifact_namer.analysis_plot_name(
+                "curriculum_final", 
+                base_dir="outputs/curriculum_training/plots"
+            )
             create_curriculum_plots(
                 phase_rewards=self.phase_rewards,
                 phase_distances=self.phase_distances,
@@ -630,7 +714,11 @@ class CurriculumNCAPTrainer:
                 temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
                 env.env.set_manual_progress(temp_progress)
                 
-                trajectory_path = f"outputs/curriculum_training/plots/final_trajectory_phase_{phase}.png"
+                trajectory_path = self.artifact_namer.analysis_plot_name(
+                    "final_trajectory", 
+                    phase=f"phase{phase}",
+                    base_dir="outputs/curriculum_training/plots"
+                )
                 stats = create_trajectory_analysis(
                     agent=agent,
                     env=env,
@@ -646,7 +734,10 @@ class CurriculumNCAPTrainer:
             
             # Final test video with phase comparisons
             pbar.set_description("🎬 Creating phase comparison video")
-            final_video_path = f"outputs/curriculum_training/videos/curriculum_final_video.mp4"
+            final_video_path = self.artifact_namer.evaluation_video_name(
+                evaluation_type="phase_comparison_final",
+                base_dir="outputs/curriculum_training/videos"
+            )
             create_phase_comparison_video(
                 agent=agent,
                 env=env,
@@ -659,7 +750,9 @@ class CurriculumNCAPTrainer:
             
             # Training summary
             pbar.set_description("📄 Generating training summary")
-            summary_path = f"outputs/curriculum_training/summaries/curriculum_training_summary.md"
+            summary_path = self.artifact_namer.experiment_summary_name(
+                base_dir="outputs/curriculum_training/summaries"
+            )
             save_training_summary(
                 eval_results=final_eval,
                 training_history={
@@ -692,7 +785,7 @@ class CurriculumNCAPTrainer:
         print(f"   Episodes per phase: {eval_episodes}")
         print(f"   Video length: {video_steps} steps")
         
-        # Create environment and model
+        # Create environment and model based on model_type
         env = self.create_environment()
         model = self.create_model()
         agent, tonic_model = self.create_agent(model, env)
@@ -723,18 +816,22 @@ class CurriculumNCAPTrainer:
             
             # Training plots
             vis_pbar.set_description("📊 Creating final training plots")
+            eval_plot_path = self.artifact_namer.analysis_plot_name(
+                "evaluation_final", 
+                base_dir="outputs/curriculum_training/plots"
+            )
             create_curriculum_plots(
                 phase_rewards=self.phase_rewards,
                 phase_distances=self.phase_distances,
                 eval_results=final_eval,
-                save_path="outputs/curriculum_training/plots/evaluation_final_plots.png"
+                save_path=eval_plot_path
             )
             vis_pbar.update(1)
-            print(f"✅ Training plots saved to: outputs/curriculum_training/plots/evaluation_final_plots.png")
+            print(f"✅ Training plots saved to: {eval_plot_path}")
             
             # Trajectory analysis for each phase
-            final_trajectory_stats = {}
             phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+            final_trajectory_stats = {}
             
             for phase in range(4):
                 vis_pbar.set_description(f"📊 Analyzing {phase_names[phase]}")
@@ -742,10 +839,15 @@ class CurriculumNCAPTrainer:
                 # Set environment to specific phase
                 env.env.set_manual_progress((phase + 0.5) * 0.25)  # Middle of each phase
                 
+                eval_trajectory_path = self.artifact_namer.analysis_plot_name(
+                    "evaluation_trajectory", 
+                    phase=f"phase{phase}",
+                    base_dir="outputs/curriculum_training/plots"
+                )
                 trajectory_stats = create_trajectory_analysis(
                     agent=agent,
                     env=env,
-                    save_path=f"outputs/curriculum_training/plots/evaluation_trajectory_phase_{phase}.png",
+                    save_path=eval_trajectory_path,
                     num_steps=video_steps,
                     phase_name=f"Evaluation - {phase_names[phase]}",
                     trajectory_multiplier=self.PHASE_DURATION_CONFIG['trajectory_multiplier'][phase]
@@ -757,16 +859,19 @@ class CurriculumNCAPTrainer:
             
             # Phase comparison video
             vis_pbar.set_description("🎬 Creating phase comparison video")
-            final_video_path = f"outputs/curriculum_training/videos/evaluation_phase_comparison.mp4"
+            eval_comparison_video_path = self.artifact_namer.evaluation_video_name(
+                evaluation_type="phase_comparison",
+                base_dir="outputs/curriculum_training/videos"
+            )
             create_phase_comparison_video(
                 agent=agent,
                 env=env,
-                save_path=final_video_path,
+                save_path=eval_comparison_video_path,
                 phases_to_test=[0, 1, 2, 3],
                 phase_video_steps=self.PHASE_DURATION_CONFIG['video_steps']
             )
             vis_pbar.update(1)
-            print(f"✅ Phase comparison video: {final_video_path}")
+            print(f"✅ Phase comparison video: {eval_comparison_video_path}")
             
             # Individual test videos for each phase
             for phase in range(4):
@@ -775,20 +880,25 @@ class CurriculumNCAPTrainer:
                 # Set environment to specific phase
                 env.env.set_manual_progress((phase + 0.5) * 0.25)
                 
-                video_path = f"outputs/curriculum_training/videos/evaluation_phase_{phase}_{phase_names[phase].lower().replace(' ', '_')}.mp4"
+                phase_video_path = self.artifact_namer.evaluation_video_name(
+                    evaluation_type=f"phase{phase}_{phase_names[phase].lower().replace(' ', '_')}",
+                    base_dir="outputs/curriculum_training/videos"
+                )
                 create_test_video(
                     agent=agent,
                     env=env,
-                    save_path=video_path,
+                    save_path=phase_video_path,
                     num_steps=video_steps,
                     episode_name=f"Evaluation - {phase_names[phase]}"
                 )
-                print(f"   ✅ {phase_names[phase]} video: {video_path}")
+                print(f"   ✅ {phase_names[phase]} video: {phase_video_path}")
             vis_pbar.update(1)
             
             # Training summary
             vis_pbar.set_description("📄 Generating evaluation summary")
-            summary_path = f"outputs/curriculum_training/summaries/evaluation_summary.md"
+            eval_summary_path = self.artifact_namer.experiment_summary_name(
+                base_dir="outputs/curriculum_training/summaries"
+            ).replace("_experiment_summary.md", "_evaluation_summary.md")
             save_training_summary(
                 eval_results=final_eval,
                 training_history={
@@ -796,10 +906,10 @@ class CurriculumNCAPTrainer:
                     'phase_distances': self.phase_distances,
                     'trajectory_stats': final_trajectory_stats,
                 },
-                save_path=summary_path
+                save_path=eval_summary_path
             )
             vis_pbar.update(1)
-            print(f"✅ Evaluation summary: {summary_path}")
+            print(f"✅ Evaluation summary: {eval_summary_path}")
         
         total_time = time.time() - start_time
         print(f"\n🏁 Evaluation Complete!")

@@ -9,8 +9,8 @@
 - **📊 Evaluation-Only Mode**: Test visualization changes without retraining
 - **🏊 Enhanced Visibility**: Improved swimmer tracking and dynamic training status
 - **Performance Target**: 5-15m distance (2-5 body lengths) for expert swim+crawl
-- **Training Command**: `python main.py --mode train_curriculum --training_steps 1000000`
-- **Resume Command**: `python main.py --mode train_curriculum --training_steps 200000 --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt`
+- **Training Command**: `python main.py --mode train_curriculum --training_steps 1000000 --model_type enhanced_ncap`
+- **Resume Command**: `python main.py --mode train_curriculum --training_steps 200000 --resume_checkpoint outputs/enhanced_ncap/checkpoints/enhanced_ncap_*_checkpoint_step_100000.pt --model_type enhanced_ncap`
 - **Expected Duration**: 3-4 hours on RTX 3090 with checkpoints every 50k steps (biological model is 3x faster!)
 
 ### **⚡ Performance Benchmarks (RTX 3090)**
@@ -226,30 +226,63 @@ The environment will automatically detect and use GPU if available.
 ## 🎮 Usage
 
 ### 🎓 Curriculum Training (Recommended for 1M Episodes)
+
+#### **🚀 Enhanced NCAP (Default - Recommended)**
 ```bash
-# Full curriculum training: swimming → mixed environment
-python main.py --mode train_curriculum --training_steps 1000000 --save_steps 50000 --log_episodes 50
+# Full curriculum training with Enhanced NCAP (relaxation oscillator + goal-directed navigation)
+python main.py --mode train_curriculum --training_steps 1000000 --model_type enhanced_ncap --save_steps 50000
 
 # Shorter validation runs
-python main.py --mode train_curriculum --training_steps 100000 --n_links 5
+python main.py --mode train_curriculum --training_steps 100000 --model_type enhanced_ncap --n_links 5
+```
+
+#### **🧬 Biological NCAP (Baseline)**
+```bash
+# Training with original Biological NCAP (for comparison)
+python main.py --mode train_curriculum --training_steps 1000000 --model_type biological_ncap --save_steps 50000
+
+# Quick biological baseline validation
+python main.py --mode train_curriculum --training_steps 100000 --model_type biological_ncap --n_links 5
 ```
 
 ### 🔄 Resume Training from Checkpoint
-```bash
-# Continue training from where you left off
-python main.py --mode train_curriculum --training_steps 200000 --n_links 5 --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt
 
-# Scale up after validation
-python main.py --mode train_curriculum --training_steps 1000000 --n_links 5 --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt
+#### **🚀 Enhanced NCAP Checkpoints**
+```bash
+# Continue Enhanced NCAP training from checkpoint
+python main.py --mode train_curriculum --training_steps 200000 --model_type enhanced_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/enhanced_ncap/enhanced_ncap_ppo_5links_checkpoint_step_100000.pt
+
+# Scale up Enhanced NCAP after validation
+python main.py --mode train_curriculum --training_steps 1000000 --model_type enhanced_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/enhanced_ncap/enhanced_ncap_ppo_5links_checkpoint_step_200000.pt
+```
+
+#### **🧬 Biological NCAP Checkpoints**
+```bash
+# Continue Biological NCAP training from checkpoint
+python main.py --mode train_curriculum --training_steps 200000 --model_type biological_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/biological_ncap/biological_ncap_ppo_5links_checkpoint_step_100000.pt
+
+# Scale up Biological NCAP after validation
+python main.py --mode train_curriculum --training_steps 1000000 --model_type biological_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/biological_ncap/biological_ncap_ppo_5links_checkpoint_step_200000.pt
 ```
 
 ### 📊 Evaluation-Only Mode (No Training)
-```bash
-# Comprehensive evaluation from checkpoint (perfect for testing visualization changes)
-python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt --n_links 5
 
-# Custom evaluation parameters
-python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt --n_links 5 --eval_episodes 30 --eval_video_steps 600
+#### **🚀 Enhanced NCAP Evaluation**
+```bash
+# Comprehensive Enhanced NCAP evaluation from checkpoint
+python main.py --mode evaluate_curriculum --model_type enhanced_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/enhanced_ncap/enhanced_ncap_ppo_5links_checkpoint_step_100000.pt
+
+# Custom Enhanced NCAP evaluation parameters
+python main.py --mode evaluate_curriculum --model_type enhanced_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/enhanced_ncap/enhanced_ncap_ppo_5links_checkpoint_step_100000.pt --eval_episodes 30 --eval_video_steps 600
+```
+
+#### **🧬 Biological NCAP Evaluation**
+```bash
+# Comprehensive Biological NCAP evaluation from checkpoint
+python main.py --mode evaluate_curriculum --model_type biological_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/biological_ncap/biological_ncap_ppo_5links_checkpoint_step_100000.pt
+
+# Custom Biological NCAP evaluation parameters  
+python main.py --mode evaluate_curriculum --model_type biological_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/biological_ncap/biological_ncap_ppo_5links_checkpoint_step_100000.pt --eval_episodes 30 --eval_video_steps 600
 ```
 
 **What this does:**
@@ -262,11 +295,42 @@ python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum
 - **Enhanced trajectory analysis** similar to research publications
 - **Expected duration**: 3-4 hours on RTX 3090 (biological model is 3x faster!)
 
-**Generated outputs:**
+### 🧠 Model Types Explained
+
+#### **🚀 Enhanced NCAP (Default)**
+- **Features**: Relaxation oscillator + goal-directed navigation + anti-tail-chasing
+- **Based on**: [C. elegans research](https://elifesciences.org/articles/69905) (eLife, 2021)
+- **Advantages**: Target-seeking behavior, dramatic frequency adaptation (3-5x)
+- **Best for**: Navigation tasks, goal-directed locomotion
+
+#### **🧬 Biological NCAP (Baseline)**  
+- **Features**: Pure biological adaptation without artificial memory (LSTM)
+- **Advantages**: 99.4% fewer parameters, 59% stronger environment adaptation
+- **Best for**: Baseline comparison, minimal complexity requirements
+
+### 🗂️ Organized Output Structure
+Artifacts are automatically organized by model type to prevent overwriting:
+```
+outputs/
+├── enhanced_ncap/              # Enhanced NCAP artifacts
+│   ├── checkpoints/
+│   ├── models/
+│   ├── videos/
+│   └── plots/
+├── biological_ncap/            # Biological NCAP artifacts  
+│   ├── checkpoints/
+│   ├── models/
+│   ├── videos/
+│   └── plots/
+└── comparisons/                # Cross-model comparisons
+```
+
+**Generated outputs for each model:**
 - 📊 **Training plots**: Progress charts and performance analysis
 - 🎬 **Videos with zone indicators**: Visual training progress with overlaid environment zones
 - 📈 **Trajectory analysis**: Detailed swimmer path analysis with environment transitions (similar to research publications)
 - 📄 **Comprehensive summaries**: Performance metrics and training statistics
+- 🔄 **Model-specific checkpoints**: Organized by model type for easy comparison
 
 **Enhanced visualization features:**
 - 🎯 **Zone overlays**: Semi-transparent land zones with labels in videos
@@ -358,13 +422,25 @@ python main.py --mode evaluate --load_model outputs/curriculum_final_model_5link
 
 ### ⚙️ **Command Line Options**
 ```bash
+# Model selection
+--model_type enhanced_ncap     # Enhanced NCAP with relaxation oscillator (default)
+--model_type biological_ncap   # Original biological NCAP (baseline)
+
+# Basic training options
+--mode train_curriculum        # Curriculum training mode
+--mode evaluate_curriculum     # Evaluation-only mode  
+--training_steps N            # Total training steps target
+--n_links N                   # Number of swimmer links (default: 5)
+--algorithm ppo               # RL algorithm (default: ppo)
+
 # Resume training options
---resume_checkpoint PATH    # Path to checkpoint file
---training_steps N          # New total target (not additional steps)
+--resume_checkpoint PATH      # Path to model-specific checkpoint file
+--save_steps N               # Steps between saves (default: 50000)
+--log_episodes N             # Episodes between logs (default: 50)
 
 # Evaluation options  
---eval_episodes N          # Episodes per phase (default: 20)
---eval_video_steps N       # Video length in steps (default: 400)
+--eval_episodes N            # Episodes per phase (default: 20)
+--eval_video_steps N         # Video length in steps (default: 400)
 ```
 
 ### 🔧 **Phase Duration Configuration**
@@ -391,41 +467,57 @@ PHASE_DURATION_CONFIG = {
 
 ## 🎯 **Example Workflow**
 
-### **Typical Training & Analysis Pipeline**
+### **Typical Training & Analysis Pipeline (Enhanced NCAP)**
 ```bash
-# 1. Start with validation training
-python main.py --mode train_curriculum --training_steps 100000 --n_links 5
+# 1. Start with Enhanced NCAP validation training
+python main.py --mode train_curriculum --training_steps 100000 --model_type enhanced_ncap --n_links 5
 
-# 2. Evaluate the 100k results  
-python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt --n_links 5
+# 2. Evaluate the 100k Enhanced NCAP results  
+python main.py --mode evaluate_curriculum --model_type enhanced_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/enhanced_ncap/enhanced_ncap_ppo_5links_checkpoint_step_100000.pt
 
-# 3. If satisfied, continue to 200k
-python main.py --mode train_curriculum --training_steps 200000 --n_links 5 --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt
+# 3. If satisfied, continue Enhanced NCAP to 200k
+python main.py --mode train_curriculum --training_steps 200000 --model_type enhanced_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/enhanced_ncap/enhanced_ncap_ppo_5links_checkpoint_step_100000.pt
 
-# 4. Scale up to full 1M training
-python main.py --mode train_curriculum --training_steps 1000000 --n_links 5 --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_200000.pt
+# 4. Scale up Enhanced NCAP to full 1M training
+python main.py --mode train_curriculum --training_steps 1000000 --model_type enhanced_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/enhanced_ncap/enhanced_ncap_ppo_5links_checkpoint_step_200000.pt
 
-# 5. Final comprehensive analysis
-python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_1000000.pt --n_links 5 --eval_episodes 50 --eval_video_steps 800
+# 5. Final comprehensive Enhanced NCAP analysis
+python main.py --mode evaluate_curriculum --model_type enhanced_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/enhanced_ncap/enhanced_ncap_ppo_5links_checkpoint_step_1000000.pt --eval_episodes 50 --eval_video_steps 800
 ```
 
 ### **Testing Visualization Changes**
 ```bash
 # Make code changes to visualization...
 
-# Test immediately without retraining
-python main.py --mode evaluate_curriculum --resume_checkpoint outputs/curriculum_training/checkpoints/checkpoint_step_100000.pt --n_links 5 --eval_episodes 10 --eval_video_steps 300
+# Test immediately without retraining (Enhanced NCAP)
+python main.py --mode evaluate_curriculum --model_type enhanced_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/enhanced_ncap/enhanced_ncap_ppo_5links_checkpoint_step_100000.pt --eval_episodes 10 --eval_video_steps 300
+
+# Test with Biological NCAP for comparison
+python main.py --mode evaluate_curriculum --model_type biological_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/biological_ncap/biological_ncap_ppo_5links_checkpoint_step_100000.pt --eval_episodes 10 --eval_video_steps 300
 
 # Quick turnaround for iterative improvements
 ```
 
-### **Checkpoint Locations**
-- **Checkpoints**: `outputs/curriculum_training/checkpoints/checkpoint_step_X.pt`
-- **Training Logs**: `outputs/curriculum_training/logs/`
-- **Videos**: `outputs/curriculum_training/videos/`
-- **Plots**: `outputs/curriculum_training/plots/`  
-- **Summaries**: `outputs/curriculum_training/summaries/`
-- **Models**: `outputs/curriculum_training/models/`
+### **Organized Output Locations**
+
+#### **🚀 Enhanced NCAP Artifacts**
+- **Checkpoints**: `outputs/curriculum_training/checkpoints/enhanced_ncap/enhanced_ncap_ppo_5links_checkpoint_step_X.pt`
+- **Training Logs**: `outputs/curriculum_training/logs/enhanced_ncap/`
+- **Videos**: `outputs/curriculum_training/videos/enhanced_ncap/`
+- **Plots**: `outputs/curriculum_training/plots/enhanced_ncap/`  
+- **Summaries**: `outputs/curriculum_training/summaries/enhanced_ncap/`
+- **Models**: `outputs/curriculum_training/models/enhanced_ncap/`
+
+#### **🧬 Biological NCAP Artifacts**
+- **Checkpoints**: `outputs/curriculum_training/checkpoints/biological_ncap/biological_ncap_ppo_5links_checkpoint_step_X.pt`
+- **Training Logs**: `outputs/curriculum_training/logs/biological_ncap/`
+- **Videos**: `outputs/curriculum_training/videos/biological_ncap/`
+- **Plots**: `outputs/curriculum_training/plots/biological_ncap/`  
+- **Summaries**: `outputs/curriculum_training/summaries/biological_ncap/`
+- **Models**: `outputs/curriculum_training/models/biological_ncap/`
+
+#### **⚖️ Cross-Model Comparisons**
+- **Comparisons**: `outputs/comparisons/` (shared between model types)
 
 ## 🔬 Key Research Discoveries
 
