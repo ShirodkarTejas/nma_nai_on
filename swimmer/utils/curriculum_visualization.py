@@ -389,7 +389,7 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
         return frame
 
 
-def create_trajectory_analysis(agent, env, save_path, num_steps=500, phase_name=""):
+def create_trajectory_analysis(agent, env, save_path, num_steps=500, phase_name="", trajectory_multiplier=1.0):
     """Create detailed trajectory analysis similar to trained_model_analysis style."""
     
     # Create organized output directory
@@ -401,7 +401,13 @@ def create_trajectory_analysis(agent, env, save_path, num_steps=500, phase_name=
         filename = os.path.basename(save_path)
         save_path = os.path.join(plots_dir, filename)
     
-    print(f"📊 Creating trajectory analysis for {phase_name}")
+    # Apply trajectory multiplier from configuration
+    actual_steps = int(num_steps * trajectory_multiplier)
+    
+    if trajectory_multiplier != 1.0:
+        print(f"📊 Creating trajectory analysis for {phase_name} with {actual_steps} steps ({trajectory_multiplier}x duration)")
+    else:
+        print(f"📊 Creating trajectory analysis for {phase_name}")
     
     # Record trajectory data
     positions = []
@@ -414,7 +420,7 @@ def create_trajectory_analysis(agent, env, save_path, num_steps=500, phase_name=
     total_distance = 0.0
     prev_pos = None
     
-    for step in range(num_steps):
+    for step in range(actual_steps):
         # Get current position if possible
         try:
             if hasattr(env, 'env') and hasattr(env.env, 'env'):
@@ -1021,7 +1027,7 @@ def create_test_video(agent, env, save_path, num_steps=300, episode_name="Test E
         print(f"⚠️ Not enough frames ({len(frames)}) to create video")
 
 
-def create_phase_comparison_video(agent, env, save_path, phases_to_test=None):
+def create_phase_comparison_video(agent, env, save_path, phases_to_test=None, phase_video_steps=None):
     """Create a video showing performance across different phases."""
     
     # Create organized output directory
@@ -1036,11 +1042,16 @@ def create_phase_comparison_video(agent, env, save_path, phases_to_test=None):
     if phases_to_test is None:
         phases_to_test = [0, 1, 2, 3]  # All phases
     
+    # Default phase video steps if not provided
+    if phase_video_steps is None:
+        phase_video_steps = [500, 500, 500, 1000]  # Default with extended full complexity
+    
     phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
     all_frames = []
     
-    # Create progress bar for video recording (500 steps per phase + transitions)
-    total_steps = len(phases_to_test) * 500 + (len(phases_to_test) - 1) * 30  # 30 transition frames
+    # Calculate total steps from configuration
+    total_steps = sum(phase_video_steps[phase] for phase in phases_to_test)
+    total_steps += (len(phases_to_test) - 1) * 30  # 30 transition frames
     
     with tqdm(total=total_steps, desc="🎬 Recording Video", unit="frame",
              bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as video_pbar:
@@ -1052,6 +1063,12 @@ def create_phase_comparison_video(agent, env, save_path, phases_to_test=None):
             temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
             env.env.set_manual_progress(temp_progress)
             
+            # Get phase-specific video duration from configuration
+            phase_steps = phase_video_steps[phase]
+            
+            if phase_steps != 500:  # Log when using non-standard duration
+                print(f"🎬 {phase_names[phase]} video: Recording {phase_steps} steps")
+            
             # Record this phase
             phase_frames = []
             obs = env.reset()
@@ -1059,7 +1076,7 @@ def create_phase_comparison_video(agent, env, save_path, phases_to_test=None):
             # Track swimmer position for trail in this phase
             phase_position_history = []
             
-            for step in range(500):  # 500 steps per phase (16+ seconds each)
+            for step in range(phase_steps):  # Data-driven steps per phase
                 try:
                     # Track swimmer position
                     try:

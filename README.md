@@ -367,6 +367,28 @@ python main.py --mode evaluate --load_model outputs/curriculum_final_model_5link
 --eval_video_steps N       # Video length in steps (default: 400)
 ```
 
+### 🔧 **Phase Duration Configuration**
+
+Phase durations are now **data-driven and easily configurable**! Edit the `PHASE_DURATION_CONFIG` in `CurriculumNCAPTrainer`:
+
+```python
+PHASE_DURATION_CONFIG = {
+    'evaluation_steps': [200, 200, 200, 400],     # Steps per episode for each phase
+    'video_steps': [500, 500, 500, 1000],         # Steps per video for each phase  
+    'trajectory_multiplier': [1.0, 1.0, 1.0, 2.0] # Multiplier for trajectory analysis
+}
+```
+
+**Current Configuration (Phase 0-3):**
+- **Evaluation**: 200, 200, 200, **400** steps per episode
+- **Videos**: 500, 500, 500, **1000** steps per phase
+- **Trajectory**: 1x, 1x, 1x, **2x** multiplier
+
+**Why Full Complexity Gets More Time:**
+- Complex environment needs time for **zone transitions**
+- Swimmer must demonstrate **swimming → crawling → swimming**
+- **2x duration** allows complete exploration of all zones
+
 ## 🎯 **Example Workflow**
 
 ### **Typical Training & Analysis Pipeline**

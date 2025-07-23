@@ -39,6 +39,13 @@ class CurriculumNCAPTrainer:
     - Phase 4 (80-100%): Full mixed environment complexity
     """
     
+    # Phase duration configuration (easily modifiable)
+    PHASE_DURATION_CONFIG = {
+        'evaluation_steps': [200, 200, 200, 400],     # Steps per episode for each phase
+        'video_steps': [500, 500, 500, 1000],         # Steps per video for each phase  
+        'trajectory_multiplier': [1.0, 1.0, 1.0, 2.0] # Multiplier for trajectory analysis
+    }
+    
     def __init__(self, 
                  n_links=5,
                  learning_rate=3e-5,
@@ -287,6 +294,13 @@ class CurriculumNCAPTrainer:
             # Create temporary environment for this phase
             temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
             
+            # Get phase-specific episode duration from configuration
+            steps_per_episode = self.PHASE_DURATION_CONFIG['evaluation_steps'][phase]
+            phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+            
+            if steps_per_episode != 200:  # Log when using non-standard duration
+                print(f"🎯 {phase_names[phase]}: Using {steps_per_episode} steps per episode")
+            
             distances = []
             rewards = []
             
@@ -299,7 +313,7 @@ class CurriculumNCAPTrainer:
                 episode_reward = 0
                 initial_pos = env.env.physics.named.data.xpos['head'][:2].copy()
                 
-                for _ in range(200):  # 200 steps per episode
+                for _ in range(steps_per_episode):  # Data-driven steps per episode
                     action = agent.test_step(obs)
                     obs, reward, done, _ = env.step(action)
                     episode_reward += reward
@@ -518,7 +532,8 @@ class CurriculumNCAPTrainer:
                     env=env,
                     save_path=trajectory_path,
                     num_steps=500,
-                    phase_name=f"Step {self.current_step} - {phase_names[current_phase]}"
+                    phase_name=f"Step {self.current_step} - {phase_names[current_phase]}",
+                    trajectory_multiplier=self.PHASE_DURATION_CONFIG['trajectory_multiplier'][current_phase]
                 )
                 
                 tqdm.write(f"📊 Trajectory stats: distance={trajectory_stats['final_distance']:.3f}m, "
@@ -621,7 +636,8 @@ class CurriculumNCAPTrainer:
                     env=env,
                     save_path=trajectory_path,
                     num_steps=1000,  # Longer analysis for final evaluation
-                    phase_name=f"Final - {phase_names[phase]}"
+                    phase_name=f"Final - {phase_names[phase]}",
+                    trajectory_multiplier=self.PHASE_DURATION_CONFIG['trajectory_multiplier'][phase]
                 )
                 
                 final_trajectory_stats[phase] = stats
@@ -635,7 +651,8 @@ class CurriculumNCAPTrainer:
                 agent=agent,
                 env=env,
                 save_path=final_video_path,
-                phases_to_test=[0, 1, 2, 3]
+                phases_to_test=[0, 1, 2, 3],
+                phase_video_steps=self.PHASE_DURATION_CONFIG['video_steps']
             )
             pbar.update(1)
             tqdm.write(f"✅ Phase comparison video: {final_video_path}")
@@ -730,7 +747,8 @@ class CurriculumNCAPTrainer:
                     env=env,
                     save_path=f"outputs/curriculum_training/plots/evaluation_trajectory_phase_{phase}.png",
                     num_steps=video_steps,
-                    phase_name=f"Evaluation - {phase_names[phase]}"
+                    phase_name=f"Evaluation - {phase_names[phase]}",
+                    trajectory_multiplier=self.PHASE_DURATION_CONFIG['trajectory_multiplier'][phase]
                 )
                 
                 final_trajectory_stats[phase] = trajectory_stats
@@ -744,7 +762,8 @@ class CurriculumNCAPTrainer:
                 agent=agent,
                 env=env,
                 save_path=final_video_path,
-                phases_to_test=[0, 1, 2, 3]
+                phases_to_test=[0, 1, 2, 3],
+                phase_video_steps=self.PHASE_DURATION_CONFIG['video_steps']
             )
             vis_pbar.update(1)
             print(f"✅ Phase comparison video: {final_video_path}")
