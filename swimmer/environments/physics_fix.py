@@ -29,7 +29,10 @@ def apply_swimming_physics_fix(physics, gear_ratio=1.0):
         actuator_name = physics.model.id2name(i, 'actuator') or f"actuator_{i}"
         print(f"  {actuator_name}: {original_gear:.2e} → {gear_ratio:.2f}")
     
-    print(f"✅ Applied gear ratio fix to {physics.model.nu} actuators")
+    # Reduced logging frequency to avoid clutter during long training runs
+    if not hasattr(apply_swimming_physics_fix, '_already_logged'):
+        print(f"✅ Applied gear ratio fix to {physics.model.nu} actuators")
+        apply_swimming_physics_fix._already_logged = True
     return original_gears
 
 

@@ -1,0 +1,50 @@
+
+=== TRAINING SUMMARY REPORT ===
+Experiment: curriculum_ncap_6links
+Duration: 4.65 minutes
+Total Episodes: 0
+Total Training Steps: 4
+
+=== PERFORMANCE METRICS ===
+Rewards:
+  - Average: 0.0000
+  - Maximum: 0.0000
+  - Minimum: 0.0000
+  - Final: 0.0000
+
+Distances:
+  - Average: 0.0000
+  - Maximum: 0.0000
+  - Final: 0.0000
+
+=== CONFIGURATION ===
+
+=== FILES GENERATED ===
+- Configuration: outputs/training_logs\curriculum_ncap_6links\config.json
+- Metrics: outputs/training_logs\curriculum_ncap_6links\metrics.json
+- Episodes: outputs/training_logs\curriculum_ncap_6links\episodes.json
+- Plots: outputs/training_logs\curriculum_ncap_6links\training_plots.png
+
+
+=== ADVANCED METRICS ===
+
+Hardware Utilization:
+  - Peak CPU: 51.0%
+  - Peak Memory: 48.6%
+  - Total Disk Used: 816.7 GB
+
+Training Health:
+  - Average Gradient Norm: 0.0000
+  - Loss Stability (variance): 0.0000
+  - Parameter Change Rate: 0.0000
+
+Performance Analysis:
+  - Average Steps/Sec: 0.0
+  - Performance Stability: 0.0
+
+ETA Accuracy:
+  - ETA Predictions Made: 4
+  - Final ETA: 2025-07-23T13:36:12.747468
+
+=== RECOMMENDATIONS ===
+- Consider increasing learning rate (very small gradients)

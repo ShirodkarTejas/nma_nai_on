@@ -10,6 +10,7 @@ import numpy as np
 import os
 import time
 import tonic
+from tqdm import tqdm
 from ..models.simple_ncap import SimpleNCAPSwimmer
 from ..environments.progressive_mixed_env import TonicProgressiveMixedWrapper
 from ..utils.training_logger import TrainingLogger
@@ -258,6 +259,20 @@ class CurriculumNCAPTrainer:
         if ADVANCED_LOGGING_AVAILABLE:
             self.logger.start_monitoring()
         
+        # Initialize progress bars
+        main_pbar = tqdm(
+            total=self.training_steps,
+            desc="🎓 Curriculum Training",
+            unit="steps",
+            unit_scale=True,
+            position=0,
+            leave=True,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
+        )
+        
+        # Phase progress tracking
+        phase_names = ["🏊 Pure Swimming", "🏝️ Single Land Zone", "🏝️🏝️ Two Land Zones", "🌍 Full Complexity"]
+        
         while self.current_step < self.training_steps:
             # Get current training progress
             progress = self.current_step / self.training_steps
@@ -265,17 +280,20 @@ class CurriculumNCAPTrainer:
             
             # Check for phase transitions
             if current_phase != last_phase:
-                print(f"\n🎓 PHASE TRANSITION: {last_phase} → {current_phase}")
-                print(f"   Progress: {progress:.2%}")
-                print(f"   Step: {self.current_step:,}/{self.training_steps:,}")
+                # Update progress bar description with new phase
+                main_pbar.set_description(f"🎓 Curriculum Training - {phase_names[current_phase]}")
+                
+                tqdm.write(f"\n🎓 PHASE TRANSITION: {last_phase} → {current_phase}")
+                tqdm.write(f"   Progress: {progress:.2%}")
+                tqdm.write(f"   Step: {self.current_step:,}/{self.training_steps:,}")
                 
                 # Evaluate performance at phase transition
                 if last_phase >= 0:  # Skip initial evaluation
                     eval_results = self.evaluate_performance(agent, env)
-                    print(f"   Phase {last_phase} final performance:")
+                    tqdm.write(f"   Phase {last_phase} final performance:")
                     for phase, results in eval_results.items():
                         if phase <= last_phase:
-                            print(f"     Phase {phase}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
+                            tqdm.write(f"     Phase {phase}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
                 
                 last_phase = current_phase
             
@@ -290,6 +308,7 @@ class CurriculumNCAPTrainer:
             initial_pos = env.env.physics.named.data.xpos['head'][:2].copy()
             
             # Run episode
+            episode_start_step = self.current_step
             for _ in range(1000):  # Max episode length
                 action = agent.step(obs)
                 obs, reward, done, _ = env.step(action)
@@ -299,6 +318,10 @@ class CurriculumNCAPTrainer:
                 
                 if done or self.current_step >= self.training_steps:
                     break
+            
+            # Update progress bar for steps taken this episode
+            steps_this_episode = self.current_step - episode_start_step
+            main_pbar.update(steps_this_episode)
             
             # Calculate episode distance
             final_pos = env.env.physics.named.data.xpos['head'][:2].copy()
@@ -317,18 +340,32 @@ class CurriculumNCAPTrainer:
                 recent_rewards = self.phase_rewards[current_phase][-10:] if self.phase_rewards[current_phase] else [0]
                 recent_distances = self.phase_distances[current_phase][-10:] if self.phase_distances[current_phase] else [0]
                 
+                # Update progress bar postfix with current stats
+                recent_reward = np.mean(recent_rewards)
+                recent_distance = np.mean(recent_distances)
+                
+                main_pbar.set_postfix({
+                    'Phase': current_phase,
+                    'Episode': f"{self.current_episode:,}",
+                    'Reward': f"{recent_reward:.1f}",
+                    'Distance': f"{recent_distance:.3f}m",
+                    'Steps/s': f"{steps_per_sec:.1f}"
+                })
+                
                 # Calculate ETA if advanced logging is available
                 eta_str = ""
                 if ADVANCED_LOGGING_AVAILABLE:
                     eta = self.logger.calculate_eta(self.current_step, self.training_steps)
                     eta_str = f" | ETA: {eta}"
                 
-                print(f"[{self.current_step:7d}/{self.training_steps:7d}] "
-                      f"Phase {current_phase} | "
-                      f"Episode {self.current_episode:6d} | "
-                      f"Reward: {np.mean(recent_rewards):6.2f} | "
-                      f"Distance: {np.mean(recent_distances):6.3f}m | "
-                      f"Steps/s: {steps_per_sec:.1f}{eta_str}")
+                # Detailed logging (less frequent to avoid clutter)
+                if self.current_episode % (self.log_episodes * 4) == 0:  # Every 200 episodes instead of 50
+                    tqdm.write(f"[{self.current_step:7d}/{self.training_steps:7d}] "
+                              f"Phase {current_phase} | "
+                              f"Episode {self.current_episode:6d} | "
+                              f"Reward: {recent_reward:6.2f} | "
+                              f"Distance: {recent_distance:6.3f}m | "
+                              f"Steps/s: {steps_per_sec:.1f}{eta_str}")
                 
                 # Log to file
                 self.logger.log_training_step({
@@ -344,7 +381,7 @@ class CurriculumNCAPTrainer:
             
             # Periodic saves and evaluation
             if self.current_step % self.save_steps == 0:
-                print(f"\n💾 Checkpoint at step {self.current_step:,}")
+                tqdm.write(f"\n💾 Checkpoint at step {self.current_step:,}")
                 
                 # Save model
                 checkpoint_path = f"outputs/curriculum_checkpoints/step_{self.current_step}.pt"
@@ -359,10 +396,10 @@ class CurriculumNCAPTrainer:
                 
                 # Comprehensive evaluation
                 eval_results = self.evaluate_performance(agent, env, num_episodes=10)
-                print(f"📊 Performance across all phases:")
+                tqdm.write(f"📊 Performance across all phases:")
                 for phase, results in eval_results.items():
-                    print(f"   Phase {phase}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f} "
-                          f"(reward: {results['mean_reward']:.2f})")
+                    tqdm.write(f"   Phase {phase}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f} "
+                              f"(reward: {results['mean_reward']:.2f})")
                 
                 # Advanced checkpoint logging
                 if ADVANCED_LOGGING_AVAILABLE:
@@ -374,7 +411,7 @@ class CurriculumNCAPTrainer:
                     
                     # Show training dashboard
                     dashboard = self.logger.create_training_dashboard()
-                    print(dashboard)
+                    tqdm.write(dashboard)
                 
                 # Create visualizations
                 if self.current_step >= 50000:  # After some training
@@ -399,8 +436,8 @@ class CurriculumNCAPTrainer:
                     phase_name=f"Step {self.current_step} - {phase_names[current_phase]}"
                 )
                 
-                print(f"📊 Trajectory stats: distance={trajectory_stats['final_distance']:.3f}m, "
-                      f"transitions={trajectory_stats['transitions']}")
+                tqdm.write(f"📊 Trajectory stats: distance={trajectory_stats['final_distance']:.3f}m, "
+                          f"transitions={trajectory_stats['transitions']}")
                 
                 # Create test video
                 video_path = f"outputs/curriculum_training/videos/curriculum_video_step_{self.current_step}.mp4"
@@ -412,20 +449,23 @@ class CurriculumNCAPTrainer:
                     episode_name=f"Curriculum Step {self.current_step}"
                 )
         
+        # Close progress bar
+        main_pbar.close()
+        
         # Final evaluation and save
-        print(f"\n🏁 Training Complete!")
+        tqdm.write(f"\n🏁 Training Complete!")
         total_time_hours = (time.time() - start_time) / 3600
-        print(f"   Total time: {total_time_hours:.2f} hours")
+        tqdm.write(f"   Total time: {total_time_hours:.2f} hours")
         
         # Stop hardware monitoring
         if ADVANCED_LOGGING_AVAILABLE:
             self.logger.stop_monitoring()
         
         final_eval = self.evaluate_performance(agent, env, num_episodes=20)
-        print(f"\n📊 Final Performance Summary:")
+        tqdm.write(f"\n📊 Final Performance Summary:")
         for phase, results in final_eval.items():
-            phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
-            print(f"   {phase_names[phase]}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
+            phase_names_final = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+            tqdm.write(f"   {phase_names_final[phase]}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
         
         # Save final model
         models_dir = f"outputs/curriculum_training/models"
@@ -440,10 +480,10 @@ class CurriculumNCAPTrainer:
             }
         }, final_path)
         
-        print(f"💾 Final model saved to: {final_path}")
+        tqdm.write(f"💾 Final model saved to: {final_path}")
         
         # Create final visualizations
-        print(f"\n🎨 Creating final training visualizations...")
+        tqdm.write(f"\n🎨 Creating final training visualizations...")
         
         # Final training plots
         final_plot_path = f"outputs/curriculum_training/plots/curriculum_final_plots.png"
@@ -459,7 +499,7 @@ class CurriculumNCAPTrainer:
         final_trajectory_stats = {}
         
         for phase in range(4):
-            print(f"📊 Creating final trajectory analysis for {phase_names[phase]}...")
+            tqdm.write(f"📊 Creating final trajectory analysis for {phase_names[phase]}...")
             
             # Set environment to specific phase using manual override
             temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
@@ -475,7 +515,7 @@ class CurriculumNCAPTrainer:
             )
             
             final_trajectory_stats[phase] = stats
-            print(f"   Final distance: {stats['final_distance']:.3f}m, transitions: {stats['transitions']}")
+            tqdm.write(f"   Final distance: {stats['final_distance']:.3f}m, transitions: {stats['transitions']}")
         
         # Final test video with phase comparisons
         final_video_path = f"outputs/curriculum_training/videos/curriculum_final_video.mp4"
@@ -500,9 +540,9 @@ class CurriculumNCAPTrainer:
         
         # Generate comprehensive report with advanced metrics
         if ADVANCED_LOGGING_AVAILABLE:
-            print(f"\n📊 Generating comprehensive training report...")
+            tqdm.write(f"\n📊 Generating comprehensive training report...")
             comprehensive_report = self.logger.save_comprehensive_report()
-            print(f"✅ Advanced training analysis complete")
+            tqdm.write(f"✅ Advanced training analysis complete")
         
         env.close()
         return model, final_eval 

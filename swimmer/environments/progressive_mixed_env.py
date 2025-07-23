@@ -182,8 +182,9 @@ def progressive_swim_crawl(
     model_string, assets = swimmer.get_model_and_assets(n_links)
     physics = swimmer.Physics.from_xml_string(model_string, assets=assets)
     
-    # Apply gear ratio fix for effective movement
-    apply_swimming_physics_fix(physics, gear_ratio=0.1)
+    # Note: Gear ratio fix disabled for curriculum training to maintain biological authenticity
+    # The progressive curriculum phases provide natural scaffolding for learning
+    # apply_swimming_physics_fix(physics, gear_ratio=0.1)
     
     task = ProgressiveSwimCrawl(
         desired_speed=desired_speed,
