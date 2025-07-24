@@ -15,6 +15,9 @@ import gym
 from gym import spaces
 from .physics_fix import apply_swimming_physics_fix
 
+# **NEW**: Enhanced 3D visualization imports
+from dm_control import mjcf
+
 _SWIM_SPEED = 0.15  # Slightly higher target for more dynamic swimming
 
 class ProgressiveSwimCrawl(swimmer.Swimmer):
@@ -44,27 +47,20 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         self._target_radius = 0.8  # **REDUCED** from 1.5 to 0.8 - stricter target reaching required
         self._target_visit_timer = 0  # Auto-advance targets if swimmer gets stuck
         
-        # Target timeout based on training progress (more time for complex phases)
-        self._target_timeout = self._get_adaptive_target_timeout()
+        # Note: Timeout system eliminated to prevent reward hacking - targets must be reached!
         
         # Environment transition tracking
         self._last_environment = None
         self._environment_transitions = 0
         
-    def _get_adaptive_target_timeout(self):
-        """Calculate adaptive target timeout - **BALANCED** with timeout penalties."""
-        if self._training_progress < 0.3:
-            # Phase 1: Pure swimming - **INCREASED** to allow learning after removing timeout rewards
-            return 900  # **INCREASED** from 600 to 900 (30 seconds) - penalties motivate speed
-        elif self._training_progress < 0.6:
-            # Phase 2: Single land zone - reasonable timeout for crawling
-            return 1200  # **INCREASED** from 900 to 1200 (40 seconds)  
-        elif self._training_progress < 0.8:
-            # Phase 3: Two land zones - moderate timeout for complex navigation
-            return 1500  # **INCREASED** from 1200 to 1500 (50 seconds)
-        else:
-            # Phase 4: Full complexity - challenging but achievable
-            return 1800  # **INCREASED** from 1500 to 1800 (60 seconds)
+        # **NEW**: Force land starting for evaluation mode
+        self._force_land_start_evaluation = False
+        
+        # **NEW**: 3D visualization tracking
+        self._zone_indicators_created = False
+        self._last_visualization_phase = -1
+        
+    # Note: Timeout calculation removed - agent must reach targets to advance, no more reward hacking!
     
     def _get_progressive_land_zones(self):
         """Get land zones based on training progress - designed for deep crawling training."""
@@ -140,10 +136,10 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
 
     def initialize_episode(self, physics):
         super().initialize_episode(physics)
-        # Hide target for cleaner visualization
-        physics.named.model.mat_rgba['target', 'a'] = 1
-        physics.named.model.mat_rgba['target_default', 'a'] = 1
-        physics.named.model.mat_rgba['target_highlight', 'a'] = 1
+        # Hide default target for cleaner visualization
+        physics.named.model.mat_rgba['target', 'a'] = 0  # Hide default target
+        physics.named.model.mat_rgba['target_default', 'a'] = 0
+        physics.named.model.mat_rgba['target_highlight', 'a'] = 0
         
         # Reset goal tracking
         self._current_target_index = 0
@@ -155,6 +151,216 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         
         # Set progressive environment properties
         self._update_environment_physics(physics)
+        
+        # **NEW**: Add 3D zone and target visualization
+        self._setup_3d_visualization(physics)
+
+    def _setup_3d_visualization(self, physics):
+        """Setup enhanced 3D visual indicators for zones and targets."""
+        try:
+            # Get current targets and zones
+            current_targets = self._current_targets
+            current_zones = self._current_land_zones
+            current_phase = int(self._training_progress * 4)
+            
+            # Setup target visualization
+            self._setup_target_visualization(physics, current_targets)
+            
+            # Setup zone visualization - enhanced approach
+            self._setup_zone_visualization(physics, current_zones, current_phase)
+            
+            # Setup phase-based ground coloring  
+            self._setup_phase_visualization(physics, current_phase)
+            
+            # Store visualization state
+            self._last_visualization_phase = current_phase
+            
+        except Exception as e:
+            # If visualization setup fails, continue without it
+            print(f"3D visualization setup failed: {e}")
+            pass
+
+    def _setup_target_visualization(self, physics, current_targets):
+        """Setup 3D target sphere visualization."""
+        if current_targets and self._current_target_index < len(current_targets):
+            current_target = current_targets[self._current_target_index]
+            target_pos = current_target['position']
+            
+            # Position the target sphere
+            physics.named.model.geom_pos['target'] = [target_pos[0], target_pos[1], 0.05]
+            
+            # Color-code and style based on target type
+            if current_target['type'] == 'swim':
+                # Bright blue for water targets - more vibrant
+                physics.named.model.mat_rgba['target'] = [0.1, 0.5, 1.0, 0.9]  # Bright blue
+                target_size = self._target_radius * 0.8  # Slightly smaller for water
+            else:
+                # Warm orange/brown for land targets
+                physics.named.model.mat_rgba['target'] = [1.0, 0.6, 0.2, 0.9]  # Warm orange
+                target_size = self._target_radius * 1.0  # Standard size for land
+            
+            # Make target visible and set size
+            physics.named.model.mat_rgba['target', 'a'] = 0.9  # High visibility
+            physics.named.model.geom_size['target'] = [target_size, target_size, target_size]
+            
+            # Optional: Add pulsing effect by varying alpha
+            import time
+            pulse = 0.7 + 0.3 * abs(np.sin(time.time() * 3))  # Pulse between 0.7 and 1.0
+            physics.named.model.mat_rgba['target', 'a'] = pulse
+        else:
+            # Hide target if no current target
+            physics.named.model.mat_rgba['target', 'a'] = 0
+
+    def _setup_zone_visualization(self, physics, current_zones, current_phase):
+        """Setup enhanced zone visualization with flat ground disk indicators."""
+        
+        if not current_zones:
+            # Pure water environment - return to water colors
+            physics.named.model.mat_rgba['grid'] = [0.1, 0.3, 0.6, 1.0]  # Ocean blue
+            return
+            
+        # **NEW APPROACH**: Create flat ground disk visualization for each zone
+        # This approach uses material modifications and visual tricks to simulate ground disks
+        
+        # First, set base ground color based on phase
+        if current_phase == 1:
+            # Phase 1: Light mixed terrain base
+            physics.named.model.mat_rgba['grid'] = [0.3, 0.4, 0.3, 1.0]  # Light brown-green
+        elif current_phase == 2:
+            # Phase 2: More complex mixed terrain
+            physics.named.model.mat_rgba['grid'] = [0.4, 0.4, 0.3, 1.0]  # Medium brown-green
+        else:
+            # Phase 3+: Complex island terrain
+            physics.named.model.mat_rgba['grid'] = [0.5, 0.4, 0.3, 1.0]  # Rich terrain brown
+            
+        # **ENHANCEMENT**: Use the existing swimmer XML model to create zone indicators
+        # We'll modify ground plane properties and add visual cues through material system
+        
+        # Try to create visual zone boundaries using existing materials
+        self._create_zone_boundary_effects(physics, current_zones)
+
+    def _create_zone_boundary_effects(self, physics, current_zones):
+        """Create visual boundary effects for land zones using ground plane modifications."""
+        try:
+            # **INNOVATIVE APPROACH**: Since we can't easily add new geometry dynamically,
+            # we'll use creative material effects and existing ground plane modifications
+            
+            # For each zone, we'll try to create a visual "ring" effect on the ground
+            # by modifying the ground plane material properties in a way that suggests boundaries
+            
+            # Store zone information for potential use in custom rendering overlays
+            self._zone_visual_data = {
+                'zones': current_zones,
+                'timestamp': physics.time(),
+                'phase': int(self._training_progress * 4)
+            }
+            
+            # **ALTERNATIVE APPROACH**: Use the swimmer's own visualization system
+            # We can potentially modify material reflection/texture properties to create
+            # ground-level visual indicators
+            
+            if len(current_zones) >= 1:
+                # Modify ground reflectance to create zone awareness
+                try:
+                    # Add subtle ground texture variation for zone indication
+                    # This creates a visual "hint" of zones without geometry changes
+                    if hasattr(physics.named.model, 'mat_reflectance'):
+                        # Increase reflectance slightly to create "wet land" appearance
+                        physics.named.model.mat_reflectance['grid'] = 0.3  # Slightly more reflective
+                except:
+                    pass  # Fallback if reflectance not available
+                    
+                # **CREATIVE SOLUTION**: Use lighting effects for zone indication
+                try:
+                    # Modify ambient lighting slightly based on zones
+                    # This creates subtle environmental cues about terrain type
+                    if hasattr(physics.named.model, 'light_diffuse'):
+                        # Slightly warmer lighting for land zones
+                        light_adjustment = min(0.1, len(current_zones) * 0.03)
+                        # Note: This is experimental and may not work on all MuJoCo versions
+                except:
+                    pass  # Fallback if lighting modification not available
+                    
+        except Exception as e:
+            # Graceful fallback if any zone effect creation fails
+            pass
+
+    def _setup_phase_visualization(self, physics, current_phase):
+        """Setup phase-specific visual indicators."""
+        # Enhanced ground materials based on phase
+        phase_effects = {
+            0: {"ground_rgba": [0.1, 0.3, 0.6, 1.0], "name": "Pure Water"},      # Ocean blue
+            1: {"ground_rgba": [0.3, 0.5, 0.4, 1.0], "name": "Shallow Waters"},  # Greenish
+            2: {"ground_rgba": [0.4, 0.5, 0.3, 1.0], "name": "Mixed Terrain"},   # Mixed green-brown
+            3: {"ground_rgba": [0.5, 0.4, 0.3, 1.0], "name": "Complex Islands"}, # Island terrain
+        }
+        
+        if current_phase in phase_effects:
+            effect = phase_effects[current_phase]
+            physics.named.model.mat_rgba['grid'] = effect["ground_rgba"]
+            
+            # Optional: Could add phase-specific lighting effects here
+            # physics.named.model.light_diffuse[0] = phase_lighting...
+
+    def _update_target_visualization(self, physics):
+        """Update 3D target visualization when targets change."""
+        try:
+            # Use the enhanced target visualization setup
+            self._setup_target_visualization(physics, self._current_targets)
+            
+            # Optional: Add special effects when target changes
+            current_targets = self._current_targets
+            if current_targets and self._current_target_index < len(current_targets):
+                current_target = current_targets[self._current_target_index]
+                
+                # Add brief flash effect when target changes (optional enhancement)
+                # Could scale target briefly or change color intensity
+                flash_scale = 1.2  # 20% larger briefly
+                target_size = self._target_radius * flash_scale
+                physics.named.model.geom_size['target'] = [target_size, target_size, target_size]
+                
+                # Bright flash color
+                if current_target['type'] == 'swim':
+                    physics.named.model.mat_rgba['target'] = [0.3, 0.7, 1.0, 1.0]  # Bright flash blue
+                else:
+                    physics.named.model.mat_rgba['target'] = [1.0, 0.8, 0.4, 1.0]  # Bright flash orange
+                    
+        except Exception as e:
+            print(f"Target visualization update failed: {e}")
+            pass
+
+    def _update_dynamic_target_visualization(self, physics):
+        """Update target visualization with dynamic effects during simulation."""
+        try:
+            if self._current_targets and self._current_target_index < len(self._current_targets):
+                current_target = self._current_targets[self._current_target_index]
+                
+                # Create pulsing effect
+                import time
+                pulse_speed = 2.0  # Pulses per second
+                pulse = 0.7 + 0.3 * abs(np.sin(time.time() * pulse_speed * np.pi))
+                
+                # Apply pulsing to alpha channel for visibility
+                if current_target['type'] == 'swim':
+                    # Pulsing blue for water targets
+                    physics.named.model.mat_rgba['target'] = [0.1, 0.5, 1.0, pulse]
+                else:
+                    # Pulsing orange for land targets  
+                    physics.named.model.mat_rgba['target'] = [1.0, 0.6, 0.2, pulse]
+                    
+                # Optional: Distance-based sizing (closer = larger)
+                head_pos = physics.named.data.xpos['head'][:2]
+                target_pos = current_target['position']
+                distance = np.linalg.norm(np.array(target_pos) - head_pos)
+                
+                # Scale based on distance (closer targets appear larger)
+                distance_scale = max(0.7, min(1.3, 2.0 / (distance + 0.5)))
+                target_size = self._target_radius * distance_scale
+                physics.named.model.geom_size['target'] = [target_size, target_size, target_size]
+                
+        except Exception as e:
+            # Silent failure for dynamic effects
+            pass
 
     def _set_progressive_starting_position(self, physics):
         """Set starting position based on training progress to ensure comprehensive training."""
@@ -177,11 +383,12 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 pass  # If position setting fails, continue with default
             
         elif self._training_progress < 0.6:
-            # Phase 2: 30% chance to start on land zone (center=[3.0, 0], radius=1.8)
-            if random.random() < 0.3:
-                # Start somewhere within the land zone for crawling practice
+            # Phase 2: **INCREASED** 80% chance to start IN land zone to force escape learning
+            land_start_probability = 1.0 if self._force_land_start_evaluation else 0.8
+            if random.random() < land_start_probability:  # **FORCE** 100% for evaluation
+                # Start deep within the land zone for crawling practice
                 angle = random.uniform(0, 2 * np.pi)
-                radius = random.uniform(0, 1.2)  # Within land zone but not at edge
+                radius = random.uniform(0.5, 1.5)  # **FORCE** deeper in land zone
                 start_x = 3.0 + radius * np.cos(angle)
                 start_y = 0.0 + radius * np.sin(angle)
                 
@@ -189,56 +396,78 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 try:
                     physics.named.data.qpos['root'][0] = start_x
                     physics.named.data.qpos['root'][1] = start_y
+                    # **LOG** land starting position for debugging
+                    try:
+                        from tqdm import tqdm
+                        tqdm.write(f"🏝️ LAND START: Starting at ({start_x:.2f}, {start_y:.2f}) in land zone - must escape!")
+                    except ImportError:
+                        pass
                 except:
                     pass  # If position setting fails, continue with default
                     
         elif self._training_progress < 0.8:
-            # Phase 3: 50% chance to start on one of the land zones
-            if random.random() < 0.5:
+            # Phase 3: **INCREASED** 85% chance to start IN one of the land zones
+            land_start_probability = 1.0 if self._force_land_start_evaluation else 0.85
+            if random.random() < land_start_probability:  # **FORCE** 100% for evaluation
                 # Choose random land zone: left [-2.0, 0] or right [3.5, 0]
                 if random.random() < 0.5:
                     # Start on left land zone
                     center_x, center_y = -2.0, 0.0
                     max_radius = 1.2
+                    zone_name = "LEFT"
                 else:
                     # Start on right land zone  
                     center_x, center_y = 3.5, 0.0
                     max_radius = 1.2
+                    zone_name = "RIGHT"
                     
-                # Random position within chosen land zone
+                # Random position within chosen land zone - **FORCE** deeper positions
                 angle = random.uniform(0, 2 * np.pi)
-                radius = random.uniform(0, max_radius)
+                radius = random.uniform(0.5, max_radius)  # **FORCE** away from edges
                 start_x = center_x + radius * np.cos(angle)
                 start_y = center_y + radius * np.sin(angle)
                 
                 try:
                     physics.named.data.qpos['root'][0] = start_x
                     physics.named.data.qpos['root'][1] = start_y
+                    # **LOG** land starting position for debugging
+                    try:
+                        from tqdm import tqdm
+                        tqdm.write(f"🏝️ LAND START: Starting at ({start_x:.2f}, {start_y:.2f}) in {zone_name} land zone - must traverse!")
+                    except ImportError:
+                        pass
                 except:
                     pass
                     
         else:
-            # Phase 4: 60% chance to start on one of the four land islands
-            if random.random() < 0.6:
+            # Phase 4: **INCREASED** 90% chance to start IN one of the four land islands
+            land_start_probability = 1.0 if self._force_land_start_evaluation else 0.9
+            if random.random() < land_start_probability:  # **FORCE** 100% for evaluation
                 # Choose random island from four options
                 islands = [
-                    (-3.0, 0, 1.0),      # Left island
-                    (0.0, 2.0, 0.8),     # North island
-                    (3.0, 0, 1.0),       # Right island  
-                    (0.0, -2.0, 0.8)     # South island
+                    (-3.0, 0, 1.0, "LEFT"),      # Left island
+                    (0.0, 2.0, 0.8, "NORTH"),    # North island
+                    (3.0, 0, 1.0, "RIGHT"),      # Right island  
+                    (0.0, -2.0, 0.8, "SOUTH")    # South island
                 ]
                 
-                center_x, center_y, max_radius = random.choice(islands)
+                center_x, center_y, max_radius, island_name = random.choice(islands)
                 
-                # Random position within chosen island
+                # Random position within chosen island - **FORCE** deeper positions
                 angle = random.uniform(0, 2 * np.pi)
-                radius = random.uniform(0, max_radius * 0.8)  # Stay well within island
+                radius = random.uniform(0.3, max_radius * 0.7)  # **FORCE** deeper in island
                 start_x = center_x + radius * np.cos(angle)
                 start_y = center_y + radius * np.sin(angle)
                 
                 try:
                     physics.named.data.qpos['root'][0] = start_x
                     physics.named.data.qpos['root'][1] = start_y
+                    # **LOG** island starting position for debugging
+                    try:
+                        from tqdm import tqdm
+                        tqdm.write(f"🏝️ ISLAND START: Starting at ({start_x:.2f}, {start_y:.2f}) on {island_name} island - must navigate complex terrain!")
+                    except ImportError:
+                        pass
                 except:
                     pass
 
@@ -255,6 +484,11 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         # Store current land zones for reward calculation
         self._current_land_zones = self._get_progressive_land_zones()
         self._current_targets = self._get_progressive_targets()
+        
+        # **NEW**: Update 3D visualization if phase changed
+        current_phase = int(self._training_progress * 4)
+        if current_phase != self._last_visualization_phase:
+            self._setup_3d_visualization(physics)
 
     def get_observation(self, physics):
         """Enhanced observation with environment and goal information."""
@@ -308,6 +542,9 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             obs['in_water_zone'] = np.array([1.0 if in_water else 0.0], dtype=np.float32)
             obs['in_land_zone'] = np.array([1.0 if in_land else 0.0], dtype=np.float32)
         
+        # **NEW**: Update target visualization dynamically (pulsing effect)
+        self._update_dynamic_target_visualization(physics)
+        
         # Add goal navigation information
         if self._current_targets and self._current_target_index < len(self._current_targets):
             current_target = self._current_targets[self._current_target_index]
@@ -338,16 +575,10 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         head_pos = physics.named.data.xpos['head'][:2]
         forward_velocity = -physics.named.data.sensordata['head_vel'][1]
         
-        # **FIX 1: Reduce base reward dominance and increase target-seeking incentive**
+        # **ANTI-HACK FIX: Eliminate base movement rewards to prevent circular swimming**
         if self._training_progress < 0.3:
-            # Phase 1: Pure swimming reward (but reduced magnitude)
-            base_reward = rewards.tolerance(
-                forward_velocity,
-                bounds=(self._desired_speed, float('inf')),
-                margin=self._desired_speed,
-                value_at_margin=0.,
-                sigmoid='linear',
-            ) * 0.3  # **REDUCED** from 1.0 to 0.3
+            # Phase 1: Only reward target approach, NO base swimming reward
+            base_reward = 0.0  # **ELIMINATED** circular swimming rewards
         else:
             # Phase 2+: Mixed environment reward
             # Determine current environment
@@ -359,61 +590,32 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     break
             
             if in_land:
-                # **FIX 2: Improve land rewards to match water rewards**
+                # **ANTI-HACK FIX: Only reward land activity in context of target navigation**
                 joint_velocities = physics.data.qvel
                 joint_activity = np.sum(np.abs(joint_velocities))
                 
-                # **IMPROVED**: Land movement reward with similar magnitude to water
-                movement_reward = rewards.tolerance(
-                    forward_velocity,
-                    bounds=(self._desired_speed * 0.7, float('inf')),  # **INCREASED** from 0.4 to 0.7
-                    margin=self._desired_speed * 0.7,
-                    value_at_margin=0.,
-                    sigmoid='linear',
-                ) * 0.5  # **INCREASED** weight from base to 0.5
-                
-                # **IMPROVED**: Crawling activity reward - more generous
+                # **MINIMAL** base land reward - only for encouraging crawling movement
                 activity_reward = rewards.tolerance(
                     joint_activity,
-                    bounds=(0.1, float('inf')),  # **REDUCED** threshold from 0.15 to 0.1
-                    margin=0.1,
+                    bounds=(0.05, float('inf')),  # **REDUCED** threshold to encourage any movement
+                    margin=0.05,
                     value_at_margin=0.,
                     sigmoid='linear',
-                ) * 0.3  # **REDUCED** penalty weight
+                ) * 0.1  # **MINIMAL** reward - navigation should dominate
                 
-                # **REDUCED**: Efficiency penalty - less harsh on land movement
-                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.0002  # **REDUCED** from 0.001
+                # **MINIMAL**: Efficiency penalty
+                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.00005  # **MINIMAL** penalty
                 
-                # **IMPROVED**: Land persistence bonus
-                persistence_bonus = 0.0
-                if self._current_targets and self._current_target_index < len(self._current_targets):
-                    current_target = self._current_targets[self._current_target_index]
-                    if current_target['type'] == 'land':
-                        persistence_bonus = 0.1  # **INCREASED** from 0.05
-                
-                base_reward = movement_reward + activity_reward + efficiency_penalty + persistence_bonus
+                base_reward = activity_reward + efficiency_penalty
             else:
-                # **FIX 3: Reduce water reward to balance with land**
-                base_reward = rewards.tolerance(
-                    forward_velocity,
-                    bounds=(self._desired_speed, float('inf')),
-                    margin=self._desired_speed,
-                    value_at_margin=0.,
-                    sigmoid='linear',
-                ) * 0.3  # **REDUCED** from 1.0 to 0.3
+                # **ANTI-HACK FIX: Eliminate water base rewards to prevent circular swimming**
+                base_reward = 0.0  # **ELIMINATED** circular swimming rewards
                 
-                # Water persistence bonus
-                persistence_bonus = 0.0
-                if self._current_targets and self._current_target_index < len(self._current_targets):
-                    current_target = self._current_targets[self._current_target_index]
-                    if current_target['type'] == 'swim':
-                        persistence_bonus = 0.05  # **INCREASED** from 0.03
-                
-                # **REDUCED**: Swimming efficiency penalty
+                # **REDUCED**: Minor efficiency penalty to encourage purposeful movement
                 joint_velocities = physics.data.qvel
-                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.0001  # **REDUCED** from 0.0005
+                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.00005  # **FURTHER REDUCED**
                 
-                base_reward = base_reward + persistence_bonus + efficiency_penalty
+                base_reward = efficiency_penalty
         
         # **FIX 4: MASSIVELY increase goal-directed navigation rewards**
         navigation_reward = 0.0
@@ -428,25 +630,34 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             # **FIXED**: Set initial distance when target visit timer starts (including first step)
             if self._target_visit_timer == 0:  # Very first step with this target
                 self._initial_target_distance = distance_to_target
-                # **ENHANCED DEBUG**: Log initial distance capture
+                self._last_distance = distance_to_target  # Initialize for progress tracking
+                # **ENHANCED DEBUG**: Log initial distance capture with target details
                 try:
                     from tqdm import tqdm
-                    tqdm.write(f"🎯 NEW TARGET #{self._targets_reached + 1}: Initial distance = {distance_to_target:.3f}m")
+                    tqdm.write(f"🎯 NEW TARGET #{self._targets_reached + 1}: Position={target_pos}, Initial distance = {distance_to_target:.3f}m")
+                    # **DEBUG**: Show direction vector to help diagnose navigation issues
+                    head_pos = physics.named.data.xpos['head'][:2]
+                    direction_vector = np.array(target_pos) - head_pos
+                    tqdm.write(f"   Direction vector: {direction_vector} (swimmer at {head_pos})")
                 except ImportError:
                     pass
             
-            # Track swimming performance for debugging (every 150 steps = 5 seconds for more frequent logging)
-            if self._target_visit_timer > 0 and self._target_visit_timer % 150 == 0:
+            # Track swimming performance for debugging (every 300 steps = 10 seconds for regular monitoring)
+            if self._target_visit_timer > 0 and self._target_visit_timer % 300 == 0:
                 if hasattr(self, '_initial_target_distance'):
                     distance_traveled = max(0, self._initial_target_distance - distance_to_target)
                     time_elapsed = self._target_visit_timer / 30.0  # Convert to seconds
                     actual_speed = distance_traveled / time_elapsed if time_elapsed > 0 else 0
                     
-                    # **FIXED**: Log every target for better debugging (not conditional on targets_reached)
+                    # **PROGRESS MONITORING**: Show current progress toward target with enhanced debugging
                     try:
                         from tqdm import tqdm
                         current_target_info = f"Target #{self._targets_reached + 1}"
-                        tqdm.write(f"🏊 Swimming analysis {current_target_info}: {distance_traveled:.2f}m in {time_elapsed:.1f}s = {actual_speed:.3f}m/s (target: 0.15m/s)")
+                        progress_percent = (distance_traveled / self._initial_target_distance * 100) if self._initial_target_distance > 0 else 0
+                        tqdm.write(f"🏊 Progress update {current_target_info}: {distance_traveled:.2f}m/{self._initial_target_distance:.2f}m ({progress_percent:.1f}%) in {time_elapsed:.1f}s = {actual_speed:.3f}m/s")
+                        # **DEBUG**: Show current position vs target for diagnosis
+                        head_pos = physics.named.data.xpos['head'][:2]
+                        tqdm.write(f"   Position: {head_pos} → Target: {target_pos}, Current distance: {distance_to_target:.3f}m")
                     except ImportError:
                         pass
                 else:
@@ -458,29 +669,49 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     except ImportError:
                         pass
             
-            # **FIX 5: MUCH stronger reward for approaching target**
-            approach_reward = 2.0 / (1.0 + distance_to_target)  # **INCREASED** from 1.0 to 2.0
-            navigation_reward += approach_reward * 1.5  # **INCREASED** weight from 0.5 to 1.5
+            # **ULTIMATE CIRCULAR SWIMMING FIX**: Reward progress, not proximity
+            # Problem: Agent gets 4.8/step for circling vs 10.0 once for reaching = circular swimming profitable
             
-            # **FIX 6: Add distance-based urgency reward**
-            if distance_to_target < 3.0:  # Close to target
-                urgency_bonus = (3.0 - distance_to_target) / 3.0 * 0.8  # Extra reward for being close
-                navigation_reward += urgency_bonus
+            # Only reward actual progress toward target (not just being close)
+            if hasattr(self, '_initial_target_distance') and self._initial_target_distance > 0:
+                progress_made = max(0, self._initial_target_distance - distance_to_target)
+                progress_ratio = progress_made / self._initial_target_distance
+                
+                # Reward based on cumulative progress (diminishes over time spent)
+                time_factor = max(0.1, 1.0 - (self._target_visit_timer / 900.0))  # Decay over 30 seconds
+                progress_reward = progress_ratio * 2.0 * time_factor  # Max 2.0, diminishes with time
+                navigation_reward += progress_reward
+                
+                # Small directional bonus only when making progress
+                if self._target_visit_timer > 30:  # After 1 second
+                    recent_progress = max(0, self._last_distance - distance_to_target) if hasattr(self, '_last_distance') else 0
+                    if recent_progress > 0.01:  # Actually moving toward target
+                        navigation_reward += 0.2  # Small bonus for continued progress
+                
+                self._last_distance = distance_to_target
+            else:
+                # Fallback: minimal approach reward
+                navigation_reward += 0.5 / (1.0 + distance_to_target)
             
             # Increment visit timer for auto-advance
             self._target_visit_timer += 1
             
-            # **FIX 7: AGGRESSIVE timeout to force real target reaching**
-            # Dynamic timeout based on distance and expected speed  
-            expected_swim_time = max(150, distance_to_target / 0.12 * 30)  # 0.12 m/s realistic swim speed, 30 FPS
-            adaptive_timeout = min(self._target_timeout, expected_swim_time * 1.3)  # **REDUCED** from 2x to 1.3x expected time
-            
-            # Check for target completion (either reached or time limit)
+            # **ULTIMATE ANTI-HACK FIX: ELIMINATE timeout target switching entirely**
+            # Agent MUST reach targets - no more reward hacking through timeouts!
             target_reached = distance_to_target < self._target_radius
-            time_limit_reached = self._target_visit_timer > adaptive_timeout  # **REDUCED** timeout
             
-            if target_reached or time_limit_reached:
+            # Apply escalating penalties for taking too long (but DON'T switch targets!)
+            if self._target_visit_timer > 600:  # 20 seconds
+                navigation_reward -= 0.02  # Small continuous penalty for being slow
+            if self._target_visit_timer > 1200:  # 40 seconds  
+                navigation_reward -= 0.05  # Larger continuous penalty for being very slow
+            if self._target_visit_timer > 1800:  # 60 seconds
+                navigation_reward -= 0.1   # Large continuous penalty for being extremely slow
+            
+            # ONLY advance target if actually reached
+            if target_reached:
                 # **FINAL SWIMMING ANALYSIS**: Log performance for every target completion
+                # **FINAL SWIMMING ANALYSIS**: Log performance for actual target completion
                 if hasattr(self, '_initial_target_distance'):
                     distance_traveled = max(0, self._initial_target_distance - distance_to_target)
                     time_elapsed = self._target_visit_timer / 30.0  # Convert to seconds
@@ -489,41 +720,36 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     try:
                         from tqdm import tqdm
                         current_target_info = f"Target #{self._targets_reached + 1}"
-                        completion_type = "REACHED" if target_reached else "TIMEOUT"
-                        tqdm.write(f"🏊 Swimming analysis {current_target_info} [{completion_type}]: {distance_traveled:.2f}m in {time_elapsed:.1f}s = {actual_speed:.3f}m/s (target: 0.15m/s)")
+                        tqdm.write(f"🏊 Swimming analysis {current_target_info} [REACHED]: {distance_traveled:.2f}m in {time_elapsed:.1f}s = {actual_speed:.3f}m/s (target: 0.15m/s)")
                     except ImportError:
                         pass
                 
-                if target_reached:
-                    navigation_reward += 10.0  # **MASSIVE INCREASE** from 2.0 to 10.0
-                    # **ENHANCED**: Log every target reach with more detail for debugging
-                    try:
-                        from tqdm import tqdm
-                        time_taken = self._target_visit_timer / 30.0  # Convert to seconds
-                        initial_distance = getattr(self, '_initial_target_distance', distance_to_target)
-                        speed = initial_distance / time_taken if time_taken > 0 else 0
-                        tqdm.write(f"🎯 TARGET REACHED #{self._targets_reached + 1}: {distance_to_target:.2f}m in {time_taken:.1f}s (speed: {speed:.3f}m/s)")
-                    except ImportError:
-                        pass  # Silent if tqdm not available
-                else:
-                    # **ELIMINATED** timeout reward - now apply penalty to discourage slow movement
-                    navigation_reward -= 1.0  # **PENALTY** for failing to reach target
-                    # **ENHANCED**: Log every timeout with distance info for debugging
-                    try:
-                        from tqdm import tqdm
-                        timeout_seconds = adaptive_timeout / 30.0  # Convert to seconds (assuming 30 FPS) 
-                        tqdm.write(f"⏰ TIMEOUT #{self._targets_reached + 1}: {distance_to_target:.2f}m remaining after {timeout_seconds:.1f}s - PENALTY APPLIED")
-                    except ImportError:
-                        pass  # Silent if tqdm not available
+                # **MASSIVE REWARD** for actually reaching target
+                navigation_reward += 10.0  # Big reward for genuine target reaching
+                
+                # **ENHANCED**: Log every target reach with more detail for debugging
+                try:
+                    from tqdm import tqdm
+                    time_taken = self._target_visit_timer / 30.0  # Convert to seconds
+                    initial_distance = getattr(self, '_initial_target_distance', distance_to_target)
+                    speed = initial_distance / time_taken if time_taken > 0 else 0
+                    tqdm.write(f"🎯 TARGET REACHED #{self._targets_reached + 1}: {distance_to_target:.2f}m in {time_taken:.1f}s (speed: {speed:.3f}m/s)")
+                except ImportError:
+                    pass  # Silent if tqdm not available
                 
                 # Move to next target
                 self._current_target_index += 1
                 self._targets_reached += 1
                 self._target_visit_timer = 0
                 
+                # **NEW**: Update 3D target visualization for new target
+                self._update_target_visualization(physics)
+                
                 # Reset distance tracking for new target
                 if hasattr(self, '_initial_target_distance'):
                     delattr(self, '_initial_target_distance')
+                if hasattr(self, '_last_distance'):
+                    delattr(self, '_last_distance')
                 
                 # Only log phase completion, not every target transition
                 if self._current_target_index >= len(self._current_targets):
@@ -538,19 +764,24 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     # Reset to first target for continuous cycling
                     self._current_target_index = 0
             
-            # **FIX 8: MUCH stronger directional reward**
-            if distance_to_target > 0.1:  # Avoid division by zero
-                target_direction = (np.array(target_pos) - head_pos) / distance_to_target
-                current_velocity = physics.named.data.sensordata['head_vel'][:2]
-                velocity_magnitude = np.linalg.norm(current_velocity)
+            # **ANTI-CIRCULAR FIX**: Only reward directional movement when making real progress
+            if distance_to_target > 0.1 and hasattr(self, '_last_distance'):  # Avoid division by zero
+                recent_progress = self._last_distance - distance_to_target if hasattr(self, '_last_distance') else 0
                 
-                if velocity_magnitude > 0.01:  # Only if actually moving
-                    velocity_direction = current_velocity / velocity_magnitude
-                    directional_alignment = np.dot(target_direction, velocity_direction)
-                    navigation_reward += directional_alignment * 1.0  # **INCREASED** from 0.3 to 1.0
+                # Only give directional reward if actually getting closer to target
+                if recent_progress > 0.005:  # Must be making measurable progress (5mm per step)
+                    target_direction = (np.array(target_pos) - head_pos) / distance_to_target
+                    current_velocity = physics.named.data.sensordata['head_vel'][:2]
+                    velocity_magnitude = np.linalg.norm(current_velocity)
+                    
+                    if velocity_magnitude > 0.01:  # Only if actually moving
+                        velocity_direction = current_velocity / velocity_magnitude
+                        directional_alignment = np.dot(target_direction, velocity_direction)
+                        # Reduced directional reward - progress is already rewarded above
+                        navigation_reward += directional_alignment * 0.3  # **REDUCED** from 1.0 to 0.3
         
-        # **FIX 9: Weight navigation much higher than base movement**
-        total_reward = base_reward * 0.3 + navigation_reward * 1.0  # **REBALANCED**: nav >> base
+        # **ANTI-HACK FIX: Navigation is now the ONLY significant reward source**
+        total_reward = base_reward * 0.05 + navigation_reward * 1.0  # **NAVIGATION DOMINANT**: 95% navigation
         
         return total_reward
 
@@ -571,7 +802,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             
         self._current_land_zones = self._get_progressive_land_zones()
         self._current_targets = self._get_progressive_targets()
-        self._target_timeout = self._get_adaptive_target_timeout()  # Update timeout for new phase
+        # Note: No timeout system - targets must be reached to advance!
 
 @swimmer.SUITE.add()
 def progressive_swim_crawl(
@@ -649,18 +880,14 @@ class ProgressiveMixedSwimmerEnv:
                 tqdm.write(f"\n🎓 TRAINING PHASE CHANGE: {phase_old} → {phase_new}")
                 tqdm.write(f"   Progress: {old_progress:.2%} → {self.training_progress:.2%}")
                 
-                # Get timeout info for the new phase
-                timeout_values = [1200, 1500, 1800, 2100]  # Same as in _get_adaptive_target_timeout
-                new_timeout_seconds = timeout_values[min(phase_new, 3)] / 30.0
-                
                 if phase_new == 1:
-                    tqdm.write("   📈 Phase 1: Adding first land zone")
+                    tqdm.write("   📈 Phase 1: Adding first land zone - targets must be reached!")
                 elif phase_new == 2:
-                    tqdm.write("   📈 Phase 2: Adding second land zone")
+                    tqdm.write("   📈 Phase 2: Adding second land zone - targets must be reached!")
                 elif phase_new == 3:
-                    tqdm.write("   📈 Phase 3: Full complexity mixed environment")
+                    tqdm.write("   📈 Phase 3: Full complexity mixed environment - targets must be reached!")
                 
-                tqdm.write(f"   ⏰ Target timeout increased to {new_timeout_seconds:.1f}s for more complex navigation")
+                tqdm.write("   🎯 NO TIMEOUT TARGET SWITCHING - agent must actually reach targets to advance!")
             except ImportError:
                 pass  # Silent if tqdm not available
             
@@ -670,7 +897,7 @@ class ProgressiveMixedSwimmerEnv:
         if hasattr(self.env, '_task'):
             self.env._task.update_training_progress(self.training_progress)
     
-    def set_manual_progress(self, progress):
+    def set_manual_progress(self, progress, force_land_start=False):
         """Manually set training progress for testing purposes."""
         self.manual_progress_override = True
         old_progress = self.training_progress
@@ -691,6 +918,16 @@ class ProgressiveMixedSwimmerEnv:
         # Update task progress
         if hasattr(self.env, '_task'):
             self.env._task.update_training_progress(self.training_progress)
+            
+            # **FIX**: Force land spawning for evaluation in advanced phases
+            if force_land_start and hasattr(self.env._task, '_force_land_start_evaluation'):
+                self.env._task._force_land_start_evaluation = True
+                try:
+                    from tqdm import tqdm
+                    tqdm.write(f"🏝️ EVALUATION MODE: Forcing land starts for visual assessment")
+                except ImportError:
+                    pass
+            
             try:
                 from tqdm import tqdm
                 tqdm.write(f"🔧 Task progress updated to: {self.training_progress:.3f}")

@@ -1015,6 +1015,184 @@ def add_zone_indicators(frame, env, step_count, minimap=True):
         return frame
 
 
+def add_enhanced_zone_disks(frame, env, step_count, minimap=True):
+    """Add enhanced flat disk zone indicators that are always visible - no clipping issues."""
+    try:
+        import cv2
+        import numpy as np
+        
+        frame_with_zones = frame.copy()
+        height, width = frame.shape[:2]
+        
+        # Get current zones from environment
+        land_zones = []
+        phase_name = ""
+        progress = 0.0
+        current_zone_type = "Water"
+        swimmer_pos = None
+        
+        if hasattr(env, 'env') and hasattr(env.env, 'env') and hasattr(env.env.env, '_task'):
+            task = env.env.env._task
+            progress = getattr(task, '_training_progress', 0.0)
+            
+            # Get current land zones
+            if hasattr(task, '_current_land_zones'):
+                land_zones = task._current_land_zones or []
+                
+                # Phase detection
+                if progress < 0.3:
+                    phase_name = "Phase 1: Pure Swimming"
+                elif progress < 0.6:
+                    phase_name = "Phase 2: Single Land Zone"
+                elif progress < 0.8:
+                    phase_name = "Phase 3: Two Land Zones" 
+                else:
+                    phase_name = "Phase 4: Full Complexity"
+            
+            # Get swimmer position and current zone
+            try:
+                if hasattr(env, 'env') and hasattr(env.env, 'env'):
+                    physics = env.env.env.physics
+                    swimmer_pos = physics.named.data.xpos['head'][:2]
+                    
+                    # Check if swimmer is in any land zone
+                    in_land = False
+                    for zone in land_zones:
+                        distance = np.linalg.norm(swimmer_pos - zone['center'])
+                        if distance < zone['radius']:
+                            in_land = True
+                            break
+                    
+                    current_zone_type = "Land" if in_land else "Water"
+            except Exception as e:
+                current_zone_type = "Water"  # Default if detection fails
+        
+        # **NEW**: Enhanced flat disk zone visualization - always visible!
+        if land_zones:
+            # Convert physics coordinates to screen coordinates
+            x_range = 12.0  # -6 to 6
+            y_range = 8.0   # -4 to 4
+            
+            for i, zone in enumerate(land_zones):
+                center_x, center_y = zone['center']
+                radius = zone['radius']
+                
+                # Convert to screen coordinates
+                screen_x = int((center_x + 6.0) / x_range * width)
+                screen_y = int(height - ((center_y + 4.0) / y_range * height))
+                screen_radius = max(15, int(radius / x_range * width))  # Minimum visible radius
+                
+                # Ensure coordinates are within frame bounds
+                if 0 <= screen_x < width and 0 <= screen_y < height:
+                    # **FLAT DISK APPROACH**: Create layered disk visualization
+                    
+                    # 1. Outer boundary ring (always visible)
+                    cv2.circle(frame_with_zones, (screen_x, screen_y), screen_radius + 3, (139, 69, 19), 4)  # Thick brown outer ring
+                    cv2.circle(frame_with_zones, (screen_x, screen_y), screen_radius + 3, (255, 255, 255), 2)  # White highlight
+                    
+                    # 2. Semi-transparent filled disk (land area indicator)
+                    overlay = frame_with_zones.copy()
+                    cv2.circle(overlay, (screen_x, screen_y), screen_radius, (101, 67, 33), -1)  # Brown fill
+                    alpha = 0.25  # Light transparency so it's visible but not overwhelming
+                    frame_with_zones = cv2.addWeighted(frame_with_zones, 1-alpha, overlay, alpha, 0)
+                    
+                    # 3. Inner boundary ring for definition
+                    cv2.circle(frame_with_zones, (screen_x, screen_y), screen_radius - 2, (139, 69, 19), 2)  # Inner brown ring
+                    
+                    # 4. Center dot for precise zone center
+                    cv2.circle(frame_with_zones, (screen_x, screen_y), 5, (139, 69, 19), -1)  # Brown center dot
+                    cv2.circle(frame_with_zones, (screen_x, screen_y), 5, (255, 255, 255), 2)  # White border
+                    
+                    # 5. Zone label with enhanced visibility
+                    label = f"Land Zone {i+1}"
+                    label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+                    label_x = max(5, screen_x - label_size[0] // 2)
+                    label_y = max(25, screen_y - screen_radius - 15)
+                    
+                    # Label background with strong contrast
+                    cv2.rectangle(frame_with_zones, (label_x-5, label_y-20), 
+                                (label_x + label_size[0]+5, label_y+5), (0, 0, 0), -1)  # Black background
+                    cv2.rectangle(frame_with_zones, (label_x-5, label_y-20), 
+                                (label_x + label_size[0]+5, label_y+5), (255, 255, 255), 2)  # White border
+                    cv2.putText(frame_with_zones, label, (label_x, label_y), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)  # White text
+                    
+                    # 6. Distance indicator if swimmer is present
+                    if swimmer_pos is not None:
+                        distance_to_zone = np.linalg.norm(swimmer_pos - zone['center'])
+                        distance_text = f"{distance_to_zone:.1f}m"
+                        distance_pos_y = label_y + 25
+                        
+                        # Distance text with background
+                        distance_size = cv2.getTextSize(distance_text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+                        distance_x = max(5, screen_x - distance_size[0] // 2)
+                        
+                        cv2.rectangle(frame_with_zones, (distance_x-3, distance_pos_y-15), 
+                                    (distance_x + distance_size[0]+3, distance_pos_y+3), (50, 50, 50), -1)
+                        cv2.putText(frame_with_zones, distance_text, (distance_x, distance_pos_y), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        
+        # Add enhanced swimmer position indicator if available
+        if swimmer_pos is not None:
+            x_range = 12.0
+            y_range = 8.0
+            swimmer_screen_x = int((swimmer_pos[0] + 6.0) / x_range * width)
+            swimmer_screen_y = int(height - (swimmer_pos[1] + 4.0) / y_range * height)
+            
+            if 0 <= swimmer_screen_x < width and 0 <= swimmer_screen_y < height:
+                # Enhanced swimmer indicator with zone-aware coloring
+                swimmer_color = (0, 165, 255) if current_zone_type == "Land" else (0, 255, 255)  # Orange for land, cyan for water
+                
+                # Swimmer position with pulsing effect
+                pulse_radius = int(12 + 5 * abs(np.sin(step_count * 0.2)))
+                cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), pulse_radius, swimmer_color, 3)
+                cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 8, (255, 255, 255), -1)  # White center
+                cv2.circle(frame_with_zones, (swimmer_screen_x, swimmer_screen_y), 8, swimmer_color, 2)  # Colored border
+                
+                # Zone type indicator next to swimmer
+                zone_text = f"Swimmer: {current_zone_type}"
+                cv2.rectangle(frame_with_zones, (swimmer_screen_x + 15, swimmer_screen_y - 20), 
+                            (swimmer_screen_x + 150, swimmer_screen_y + 5), (0, 0, 0), -1)
+                cv2.putText(frame_with_zones, zone_text, (swimmer_screen_x + 20, swimmer_screen_y), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, swimmer_color, 2)
+        
+        # Add phase indicator
+        if phase_name:
+            cv2.rectangle(frame_with_zones, (5, 5), (400, 35), (0, 0, 0), -1)
+            cv2.putText(frame_with_zones, phase_name, (10, 25), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Enhanced info with zone count
+            debug_text = f"Progress: {progress:.1%} | Zones: {len(land_zones)} | Flat Disk View"
+            cv2.rectangle(frame_with_zones, (5, 40), (450, 65), (0, 0, 0), -1)
+            cv2.putText(frame_with_zones, debug_text, (10, 57), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        
+        # Add legend for zone visualization
+        legend_y = height - 100
+        cv2.rectangle(frame_with_zones, (5, legend_y), (300, height - 5), (0, 0, 0), -1)
+        cv2.putText(frame_with_zones, "Zone Legend:", (10, legend_y + 20), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.circle(frame_with_zones, (25, legend_y + 35), 8, (101, 67, 33), -1)
+        cv2.putText(frame_with_zones, "Land Zone (flat disk)", (40, legend_y + 40), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        cv2.circle(frame_with_zones, (25, legend_y + 55), 6, (0, 255, 255), -1)
+        cv2.putText(frame_with_zones, "Swimmer (water)", (40, legend_y + 60), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        cv2.circle(frame_with_zones, (25, legend_y + 75), 6, (0, 165, 255), -1)
+        cv2.putText(frame_with_zones, "Swimmer (land)", (40, legend_y + 80), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        
+        return frame_with_zones
+        
+    except ImportError:
+        print("⚠️ OpenCV not available for enhanced zone visualization")
+        return frame
+    except Exception as e:
+        print(f"⚠️ Enhanced zone visualization error: {e}")
+        return frame
+
+
 def create_test_video(agent, env, save_path, num_steps=300, episode_name="Test Episode", show_minimap=True):
     """Create a video of the agent performing in the environment with zone indicators."""
     
@@ -1051,9 +1229,9 @@ def create_test_video(agent, env, save_path, num_steps=300, episode_name="Test E
         try:
             frame = env.render(mode='rgb_array')
             if frame is not None:
-                # Add zone indicators with minimap
-                frame_with_zones = add_zone_indicators_with_trail(
-                    frame, env, step, position_history, show_minimap
+                # Add enhanced flat disk zone indicators (no clipping issues!)
+                frame_with_zones = add_enhanced_zone_disks(
+                    frame, env, step, show_minimap
                 )
                 frames.append(frame_with_zones)
         except Exception as e:
@@ -1121,7 +1299,8 @@ def create_phase_comparison_video(agent, env, save_path, phases_to_test=None, ph
             
             # Set environment to specific phase using manual override
             temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
-            env.env.set_manual_progress(temp_progress)
+            force_land_for_evaluation = phase >= 1  # Force land starts for phases 2, 3, 4
+            env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
             
             # Get phase-specific video duration from configuration
             phase_steps = phase_video_steps[phase]
@@ -1153,9 +1332,9 @@ def create_phase_comparison_video(agent, env, save_path, phases_to_test=None, ph
                     
                     frame = env.render(mode='rgb_array')
                     if frame is not None:
-                        # Use enhanced zone indicators with targets and minimap for phase comparison
-                        frame_with_zones = add_zone_indicators_with_trail(
-                            frame, env, step, phase_position_history, show_minimap=True
+                        # Use enhanced flat disk zone indicators for phase comparison (no clipping!)
+                        frame_with_zones = add_enhanced_zone_disks(
+                            frame, env, step, show_minimap=True
                         )
                         phase_frames.append(frame_with_zones)
                     

@@ -145,7 +145,13 @@ class CurriculumNCAPTrainer:
         n_joints = self.n_links - 1  # 4 joints for 5-link swimmer
         
         # **NEW**: Determine if we should use locomotion-only mode for early training
-        training_progress = self.current_step / self.training_steps
+        # Handle evaluation mode where training_steps=0
+        if self.training_steps > 0:
+            training_progress = self.current_step / self.training_steps
+        else:
+            # Evaluation mode - use full progress (1.0) to enable all features
+            training_progress = 1.0
+            
         use_locomotion_only = (self.use_locomotion_only_early_training and 
                              training_progress < 0.3)  # First 30% of training
         
@@ -447,8 +453,43 @@ class CurriculumNCAPTrainer:
         
         checkpoint_data = torch.load(checkpoint_path, map_location=self.device)
         
-        # Load model state
-        model.load_state_dict(checkpoint_data['model_state_dict'])
+        # Load model state with compatibility for missing parameters
+        try:
+            model.load_state_dict(checkpoint_data['model_state_dict'])
+        except RuntimeError as e:
+            if "Missing key(s)" in str(e):
+                print(f"⚠️ Checkpoint compatibility issue: {e}")
+                print("🔧 Attempting to load compatible parameters only...")
+                
+                # Load only the parameters that exist in both model and checkpoint
+                model_state = model.state_dict()
+                checkpoint_state = checkpoint_data['model_state_dict']
+                
+                # Filter out missing parameters and load the rest
+                compatible_state = {}
+                missing_params = []
+                extra_params = []
+                
+                for key, value in checkpoint_state.items():
+                    if key in model_state:
+                        compatible_state[key] = value
+                    else:
+                        extra_params.append(key)
+                
+                for key in model_state.keys():
+                    if key not in checkpoint_state:
+                        missing_params.append(key)
+                
+                # Load compatible parameters
+                model.load_state_dict(compatible_state, strict=False)
+                
+                print(f"✅ Loaded {len(compatible_state)} compatible parameters")
+                if missing_params:
+                    print(f"⚠️ Missing parameters (will use defaults): {missing_params}")
+                if extra_params:
+                    print(f"ℹ️ Extra parameters in checkpoint (ignored): {extra_params}")
+            else:
+                raise
         
         # Load training state with backward compatibility
         if 'current_step' in checkpoint_data:
@@ -905,7 +946,8 @@ class CurriculumNCAPTrainer:
                 
                 # Set environment to specific phase using manual override
                 temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
-                env.env.set_manual_progress(temp_progress)
+                force_land_for_evaluation = phase >= 1  # Force land starts for phases 2, 3, 4
+                env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 trajectory_path = self.artifact_namer.analysis_plot_name(
                     "final_trajectory", 
@@ -1054,7 +1096,9 @@ class CurriculumNCAPTrainer:
                 vis_pbar.set_description(f"📊 Analyzing {phase_names[phase]}")
                 
                 # Set environment to specific phase
-                env.env.set_manual_progress((phase + 0.5) * 0.25)  # Middle of each phase
+                temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
+                force_land_for_evaluation = phase >= 1  # Force land starts for phases 2, 3, 4
+                env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 eval_trajectory_path = self.artifact_namer.analysis_plot_name(
                     "evaluation_trajectory", 
@@ -1095,7 +1139,9 @@ class CurriculumNCAPTrainer:
                 vis_pbar.set_description(f"🎬 Creating {phase_names[phase]} video")
                 
                 # Set environment to specific phase
-                env.env.set_manual_progress((phase + 0.5) * 0.25)
+                temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
+                force_land_for_evaluation = phase >= 1  # Force land starts for phases 2, 3, 4
+                env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 phase_video_path = self.artifact_namer.evaluation_video_name(
                     evaluation_type=f"phase{phase}_{phase_names[phase].lower().replace(' ', '_')}",
