@@ -197,15 +197,15 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
             if hasattr(task, '_targets_reached'):
                 targets_reached = task._targets_reached
                 
-                # Phase detection
+                # Phase detection - **FIX**: Use consistent 0-based phase indexing
                 if progress < 0.3:
-                    phase_name = "Phase 1: Pure Swimming"
+                    phase_name = "Phase 0: Pure Swimming"
                 elif progress < 0.6:
-                    phase_name = "Phase 2: Single Land Zone"
+                    phase_name = "Phase 1: Single Land Zone"
                 elif progress < 0.8:
-                    phase_name = "Phase 3: Two Land Zones" 
+                    phase_name = "Phase 2: Two Land Zones" 
                 else:
-                    phase_name = "Phase 4: Full Complexity"
+                    phase_name = "Phase 3: Full Complexity"
             
             # **NEW: Detect current zone type for prominent display**
             try:
@@ -886,15 +886,15 @@ def add_zone_indicators(frame, env, step_count, minimap=True):
             if hasattr(task, '_current_land_zones'):
                 land_zones = task._current_land_zones or []
                 
-                # Phase detection
+                # Phase detection - **FIX**: Use consistent 0-based phase indexing
                 if progress < 0.3:
-                    phase_name = "Phase 1: Pure Swimming"
+                    phase_name = "Phase 0: Pure Swimming"
                 elif progress < 0.6:
-                    phase_name = "Phase 2: Single Land Zone"
+                    phase_name = "Phase 1: Single Land Zone"
                 elif progress < 0.8:
-                    phase_name = "Phase 3: Two Land Zones" 
+                    phase_name = "Phase 2: Two Land Zones" 
                 else:
-                    phase_name = "Phase 4: Full Complexity"
+                    phase_name = "Phase 3: Full Complexity"
                 
                 # Debug: Print zone info (first few frames only to avoid spam) - reduced for video creation
                 if step_count < 2:  # Reduced from 5 to 2
@@ -1039,15 +1039,15 @@ def add_enhanced_zone_disks(frame, env, step_count, minimap=True):
             if hasattr(task, '_current_land_zones'):
                 land_zones = task._current_land_zones or []
                 
-                # Phase detection
+                # Phase detection - **FIX**: Use consistent 0-based phase indexing
                 if progress < 0.3:
-                    phase_name = "Phase 1: Pure Swimming"
+                    phase_name = "Phase 0: Pure Swimming"
                 elif progress < 0.6:
-                    phase_name = "Phase 2: Single Land Zone"
+                    phase_name = "Phase 1: Single Land Zone"
                 elif progress < 0.8:
-                    phase_name = "Phase 3: Two Land Zones" 
+                    phase_name = "Phase 2: Two Land Zones" 
                 else:
-                    phase_name = "Phase 4: Full Complexity"
+                    phase_name = "Phase 3: Full Complexity"
             
             # Get swimmer position and current zone
             try:
