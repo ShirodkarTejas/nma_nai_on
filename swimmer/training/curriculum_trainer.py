@@ -43,9 +43,9 @@ class CurriculumNCAPTrainer:
     
     # Phase duration configuration (easily modifiable)
     PHASE_DURATION_CONFIG = {
-        'evaluation_steps': [200, 200, 200, 400],     # Steps per episode for each phase
-        'video_steps': [500, 500, 500, 1000],         # Steps per video for each phase  
-        'trajectory_multiplier': [1.0, 1.0, 1.0, 2.0] # Multiplier for trajectory analysis
+        'evaluation_steps': [400, 600, 800, 1200],     # **INCREASED** Steps per episode for each phase (was 200,200,200,400)
+        'video_steps': [800, 1000, 1200, 1500],         # **INCREASED** Steps per video for each phase (was 500,500,500,1000)
+        'trajectory_multiplier': [1.5, 2.0, 2.5, 3.0] # **INCREASED** Multiplier for trajectory analysis (was 1.0,1.0,1.0,2.0)
     }
     
     def __init__(self, 
@@ -56,9 +56,9 @@ class CurriculumNCAPTrainer:
                  log_episodes=50,
                  device='cuda' if torch.cuda.is_available() else 'cpu',
                  oscillator_period=60,
-                 min_oscillator_strength=1.2,
-                 min_coupling_strength=0.8,
-                 biological_constraint_frequency=5000,  # Every 5k steps
+                 min_oscillator_strength=0.8,  # **REDUCED** from 1.2 to 0.8 for speed flexibility
+                 min_coupling_strength=0.5,  # **REDUCED** from 0.8 to 0.5 for speed flexibility  
+                 biological_constraint_frequency=25000,  # **REDUCED** frequency: every 25k steps
                  resume_from_checkpoint=None,  # Path to checkpoint to resume from
                  model_type='enhanced_ncap',  # Model type: biological_ncap, enhanced_ncap
                  algorithm='ppo'):  # Algorithm for naming
@@ -179,7 +179,7 @@ class CurriculumNCAPTrainer:
             def __init__(self, ncap_model, environment):
                 self.ncap_model = ncap_model
                 self.step_count = 0
-                self.use_stable_init = True  # Reduce erratic motion for untrained models
+                self.use_stable_init = False  # **FIXED**: Allow full action range for speed development
                 
                 # Initialize RL training components
                 # Get learning rate from parent trainer
@@ -476,17 +476,17 @@ class CurriculumNCAPTrainer:
                 model.params['bneuron_prop'].data.fill_(self.min_coupling_strength)
                 constraints_applied.append(f"coupling {old_val:.3f} → {self.min_coupling_strength}")
             
-            # Ensure ipsilateral muscle is positive
-            if model.params['muscle_ipsi'].item() < 0.8:
+            # **RELAXED**: Ensure ipsilateral muscle is positive (less restrictive)
+            if model.params['muscle_ipsi'].item() < 0.5:  # **REDUCED** from 0.8 to 0.5
                 old_val = model.params['muscle_ipsi'].item()
-                model.params['muscle_ipsi'].data.fill_(0.8)
-                constraints_applied.append(f"ipsi {old_val:.3f} → 0.8")
+                model.params['muscle_ipsi'].data.fill_(0.5)
+                constraints_applied.append(f"ipsi {old_val:.3f} → 0.5")
             
-            # Ensure contralateral muscle is negative
-            if model.params['muscle_contra'].item() > -0.8:
+            # **RELAXED**: Ensure contralateral muscle is negative (less restrictive)
+            if model.params['muscle_contra'].item() > -0.5:  # **REDUCED** from -0.8 to -0.5
                 old_val = model.params['muscle_contra'].item()
-                model.params['muscle_contra'].data.fill_(-0.8)
-                constraints_applied.append(f"contra {old_val:.3f} → -0.8")
+                model.params['muscle_contra'].data.fill_(-0.5)
+                constraints_applied.append(f"contra {old_val:.3f} → -0.5")
         
         if constraints_applied:
             print(f"🧬 Applied biological constraints: {', '.join(constraints_applied)}")

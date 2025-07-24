@@ -24,7 +24,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                  desired_speed=_SWIM_SPEED,
                  land_zones=None,
                  water_viscosity=0.001,
-                 land_viscosity=1.5,  # Higher resistance to encourage crawling motion
+                 land_viscosity=0.15,  # **REDUCED** from 1.5 to 0.15 - more reasonable crawling resistance
                  training_progress=0.0,  # 0.0 = pure swimming, 1.0 = full mixed
                  **kwargs):
         super().__init__(**kwargs)
@@ -41,7 +41,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         # Goal tracking
         self._current_target_index = 0
         self._targets_reached = 0
-        self._target_radius = 1.5  # Distance to consider target "reached" (larger radius for easier completion)
+        self._target_radius = 0.8  # **REDUCED** from 1.5 to 0.8 - stricter target reaching required
         self._target_visit_timer = 0  # Auto-advance targets if swimmer gets stuck
         
         # Target timeout based on training progress (more time for complex phases)
@@ -52,19 +52,19 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         self._environment_transitions = 0
         
     def _get_adaptive_target_timeout(self):
-        """Calculate adaptive target timeout based on training progress and target distances."""
+        """Calculate adaptive target timeout based on training progress and target distances - MUCH MORE AGGRESSIVE."""
         if self._training_progress < 0.3:
-            # Phase 1: Pure swimming - extended timeout for learning swimmers
-            return 1200  # 40 seconds at 30 FPS (more time for early learning)
+            # Phase 1: Pure swimming - **REDUCED** timeout to prevent timeout rewards
+            return 600  # **REDUCED** from 1200 to 600 (20 seconds instead of 40)
         elif self._training_progress < 0.6:
-            # Phase 2: Single land zone - longer timeout for crawling (5m targets)
-            return 1500  # 50 seconds (5m / 0.1 m/s crawl speed = 50s)
+            # Phase 2: Single land zone - reasonable timeout for crawling
+            return 900  # **REDUCED** from 1500 to 900 (30 seconds)  
         elif self._training_progress < 0.8:
-            # Phase 3: Two land zones - even longer for complex navigation
-            return 1800  # 60 seconds for cross-zone navigation
+            # Phase 3: Two land zones - moderate timeout for complex navigation
+            return 1200  # **REDUCED** from 1800 to 1200 (40 seconds)
         else:
-            # Phase 4: Full complexity - maximum timeout for island hopping
-            return 2100  # 70 seconds for complex multi-zone navigation
+            # Phase 4: Full complexity - still challenging but achievable
+            return 1500  # **REDUCED** from 2100 to 1500 (50 seconds)
     
     def _get_progressive_land_zones(self):
         """Get land zones based on training progress - designed for deep crawling training."""
@@ -162,8 +162,19 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         import random
         
         if self._training_progress < 0.3:
-            # Phase 1: Always start in water (default position [0,0])
-            pass  # Keep default water starting position
+            # Phase 1: Always start in water (default position [0,0]) facing forward
+            try:
+                # **FIX**: Ensure swimmer starts facing forward (+X direction) for target reaching
+                physics.named.data.qpos['root'][0] = 0.0  # X position
+                physics.named.data.qpos['root'][1] = 0.0  # Y position  
+                physics.named.data.qpos['root'][2] = 0.0  # Z rotation (facing +X)
+                
+                # Reset all joint positions to neutral
+                for i in range(len(physics.named.data.qpos) - 3):  # Exclude root position
+                    if f'joint_{i}' in physics.named.data.qpos.axes.row.names:
+                        physics.named.data.qpos[f'joint_{i}'] = 0.0
+            except:
+                pass  # If position setting fails, continue with default
             
         elif self._training_progress < 0.6:
             # Phase 2: 30% chance to start on land zone (center=[3.0, 0], radius=1.8)
@@ -323,20 +334,20 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         return obs
 
     def get_reward(self, physics):
-        """Enhanced reward with goal-directed navigation."""
+        """Enhanced reward with goal-directed navigation - FIXED to prevent reward hacking."""
         head_pos = physics.named.data.xpos['head'][:2]
         forward_velocity = -physics.named.data.sensordata['head_vel'][1]
         
-        # Base movement reward
+        # **FIX 1: Reduce base reward dominance and increase target-seeking incentive**
         if self._training_progress < 0.3:
-            # Phase 1: Pure swimming reward
+            # Phase 1: Pure swimming reward (but reduced magnitude)
             base_reward = rewards.tolerance(
                 forward_velocity,
                 bounds=(self._desired_speed, float('inf')),
                 margin=self._desired_speed,
                 value_at_margin=0.,
                 sigmoid='linear',
-            )
+            ) * 0.3  # **REDUCED** from 1.0 to 0.3
         else:
             # Phase 2+: Mixed environment reward
             # Determine current environment
@@ -348,63 +359,63 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     break
             
             if in_land:
-                # Enhanced land reward: encourage efficient crawling motion
+                # **FIX 2: Improve land rewards to match water rewards**
                 joint_velocities = physics.data.qvel
                 joint_activity = np.sum(np.abs(joint_velocities))
                 
-                # Movement reward - slower target speed on land but still encourage progress
+                # **IMPROVED**: Land movement reward with similar magnitude to water
                 movement_reward = rewards.tolerance(
                     forward_velocity,
-                    bounds=(self._desired_speed * 0.4, float('inf')),  # Slightly higher land speed target
-                    margin=self._desired_speed * 0.4,
+                    bounds=(self._desired_speed * 0.7, float('inf')),  # **INCREASED** from 0.4 to 0.7
+                    margin=self._desired_speed * 0.7,
                     value_at_margin=0.,
                     sigmoid='linear',
-                )
+                ) * 0.5  # **INCREASED** weight from base to 0.5
                 
-                # Crawling activity reward - encourage coordinated joint movement
+                # **IMPROVED**: Crawling activity reward - more generous
                 activity_reward = rewards.tolerance(
                     joint_activity,
-                    bounds=(0.15, float('inf')),  # Encourage active crawling
-                    margin=0.15,
+                    bounds=(0.1, float('inf')),  # **REDUCED** threshold from 0.15 to 0.1
+                    margin=0.1,
                     value_at_margin=0.,
                     sigmoid='linear',
-                ) * 0.4
+                ) * 0.3  # **REDUCED** penalty weight
                 
-                # Efficiency reward - penalize excessive thrashing 
-                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.001
+                # **REDUCED**: Efficiency penalty - less harsh on land movement
+                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.0002  # **REDUCED** from 0.001
                 
-                # Land persistence bonus - small reward for staying on land when target is land
+                # **IMPROVED**: Land persistence bonus
                 persistence_bonus = 0.0
                 if self._current_targets and self._current_target_index < len(self._current_targets):
                     current_target = self._current_targets[self._current_target_index]
                     if current_target['type'] == 'land':
-                        persistence_bonus = 0.05  # Small bonus for being in correct environment
+                        persistence_bonus = 0.1  # **INCREASED** from 0.05
                 
                 base_reward = movement_reward + activity_reward + efficiency_penalty + persistence_bonus
             else:
-                # Enhanced water reward: encourage efficient swimming
+                # **FIX 3: Reduce water reward to balance with land**
                 base_reward = rewards.tolerance(
                     forward_velocity,
                     bounds=(self._desired_speed, float('inf')),
                     margin=self._desired_speed,
                     value_at_margin=0.,
                     sigmoid='linear',
-                )
+                ) * 0.3  # **REDUCED** from 1.0 to 0.3
                 
-                # Water persistence bonus - small reward for staying in water when target is swim
+                # Water persistence bonus
                 persistence_bonus = 0.0
                 if self._current_targets and self._current_target_index < len(self._current_targets):
                     current_target = self._current_targets[self._current_target_index]
                     if current_target['type'] == 'swim':
-                        persistence_bonus = 0.03  # Small bonus for being in correct environment
+                        persistence_bonus = 0.05  # **INCREASED** from 0.03
                 
-                # Swimming efficiency - small penalty for excessive joint activity in water
+                # **REDUCED**: Swimming efficiency penalty
                 joint_velocities = physics.data.qvel
-                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.0005
+                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.0001  # **REDUCED** from 0.0005
                 
                 base_reward = base_reward + persistence_bonus + efficiency_penalty
         
-        # Goal-directed navigation reward
+        # **FIX 4: MASSIVELY increase goal-directed navigation rewards**
         navigation_reward = 0.0
         
         if self._current_targets and self._current_target_index < len(self._current_targets):
@@ -414,55 +425,68 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             # Distance to target
             distance_to_target = np.linalg.norm(head_pos - target_pos)
             
+            # **FIXED**: Set initial distance when target visit timer starts (including first step)
+            if self._target_visit_timer == 0:  # Very first step with this target
+                self._initial_target_distance = distance_to_target
+            
             # Track swimming performance for debugging (every 300 steps = 10 seconds)
             if self._target_visit_timer > 0 and self._target_visit_timer % 300 == 0:
-                if not hasattr(self, '_initial_target_distance'):
-                    self._initial_target_distance = distance_to_target
-                
                 if hasattr(self, '_initial_target_distance'):
                     distance_traveled = max(0, self._initial_target_distance - distance_to_target)
                     time_elapsed = self._target_visit_timer / 30.0  # Convert to seconds
                     actual_speed = distance_traveled / time_elapsed if time_elapsed > 0 else 0
                     
-                    # Only log occasionally to reduce spam during training
-                    if self._targets_reached % 100 == 0:  # Log every 100th target for debugging
-                        try:
-                            from tqdm import tqdm
-                            tqdm.write(f"🏊 Swimming analysis: {distance_traveled:.2f}m in {time_elapsed:.1f}s = {actual_speed:.3f}m/s (target: 0.15m/s)")
-                        except ImportError:
-                            pass
+                    # **FIXED**: Log every target for better debugging (not conditional on targets_reached)
+                    try:
+                        from tqdm import tqdm
+                        current_target_info = f"Target #{self._targets_reached + 1}"
+                        tqdm.write(f"🏊 Swimming analysis {current_target_info}: {distance_traveled:.2f}m in {time_elapsed:.1f}s = {actual_speed:.3f}m/s (target: 0.15m/s)")
+                    except ImportError:
+                        pass
             
-            # Strong reward for approaching target (inverse distance)
-            approach_reward = 1.0 / (1.0 + distance_to_target)
-            navigation_reward += approach_reward * 0.5
+            # **FIX 5: MUCH stronger reward for approaching target**
+            approach_reward = 2.0 / (1.0 + distance_to_target)  # **INCREASED** from 1.0 to 2.0
+            navigation_reward += approach_reward * 1.5  # **INCREASED** weight from 0.5 to 1.5
+            
+            # **FIX 6: Add distance-based urgency reward**
+            if distance_to_target < 3.0:  # Close to target
+                urgency_bonus = (3.0 - distance_to_target) / 3.0 * 0.8  # Extra reward for being close
+                navigation_reward += urgency_bonus
             
             # Increment visit timer for auto-advance
             self._target_visit_timer += 1
             
+            # **FIX 7: AGGRESSIVE timeout to force real target reaching**
+            # Dynamic timeout based on distance and expected speed  
+            expected_swim_time = max(150, distance_to_target / 0.12 * 30)  # 0.12 m/s realistic swim speed, 30 FPS
+            adaptive_timeout = min(self._target_timeout, expected_swim_time * 1.3)  # **REDUCED** from 2x to 1.3x expected time
+            
             # Check for target completion (either reached or time limit)
             target_reached = distance_to_target < self._target_radius
-            time_limit_reached = self._target_visit_timer > self._target_timeout  # Adaptive timeout based on phase complexity
+            time_limit_reached = self._target_visit_timer > adaptive_timeout  # **REDUCED** timeout
             
             if target_reached or time_limit_reached:
                 if target_reached:
-                    navigation_reward += 2.0  # Large bonus for actually reaching target
-                    # Only log occasionally to reduce spam - use tqdm.write for progress bar compatibility
-                    if self._targets_reached % 25 == 0:  # Log every 25th target reached
-                        try:
-                            from tqdm import tqdm
-                            tqdm.write(f"🎯 Target {self._targets_reached + 1} reached! Distance: {distance_to_target:.2f}m")
-                        except ImportError:
-                            pass  # Silent if tqdm not available
+                    navigation_reward += 10.0  # **MASSIVE INCREASE** from 2.0 to 10.0
+                    # **ENHANCED**: Log every target reach with more detail for debugging
+                    try:
+                        from tqdm import tqdm
+                        time_taken = self._target_visit_timer / 30.0  # Convert to seconds
+                        initial_distance = getattr(self, '_initial_target_distance', distance_to_target)
+                        speed = initial_distance / time_taken if time_taken > 0 else 0
+                        tqdm.write(f"🎯 TARGET REACHED #{self._targets_reached + 1}: {distance_to_target:.2f}m in {time_taken:.1f}s (speed: {speed:.3f}m/s)")
+                    except ImportError:
+                        pass  # Silent if tqdm not available
                 else:
-                    navigation_reward += 0.5  # Smaller bonus for time-based advance
-                    # Only log occasionally to reduce spam - use tqdm.write for progress bar compatibility
-                    if self._targets_reached % 50 == 0:  # Log every 50th auto-advance
-                        try:
-                            from tqdm import tqdm
-                            timeout_seconds = self._target_timeout / 30.0  # Convert to seconds (assuming 30 FPS)
-                            tqdm.write(f"⏰ Target {self._targets_reached + 1} auto-advanced after {self._target_visit_timer} steps (timeout: {timeout_seconds:.1f}s)")
-                        except ImportError:
-                            pass  # Silent if tqdm not available
+                    # **MUCH REDUCED** timeout reward to discourage exploitation  
+                    navigation_reward += 0.05  # **FURTHER REDUCED** from 0.1 to 0.05
+                    # **ENHANCED**: Log every timeout with distance info for debugging
+                    try:
+                        from tqdm import tqdm
+                        timeout_seconds = adaptive_timeout / 30.0  # Convert to seconds (assuming 30 FPS) 
+                        tqdm.write(f"⏰ TIMEOUT #{self._targets_reached + 1}: {distance_to_target:.2f}m remaining after {timeout_seconds:.1f}s - NOT REACHED")
+                    except ImportError:
+                        pass  # Silent if tqdm not available
                 
                 # Move to next target
                 self._current_target_index += 1
@@ -482,11 +506,11 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                             tqdm.write(f"🏆 Phase targets completed! ({self._targets_reached} total targets)")
                         except ImportError:
                             pass  # Silent if tqdm not available
-                    navigation_reward += 5.0  # Bonus for completing all targets
+                    navigation_reward += 20.0  # **INCREASED** from 5.0 to 20.0
                     # Reset to first target for continuous cycling
                     self._current_target_index = 0
             
-            # Directional reward - encourage movement towards target
+            # **FIX 8: MUCH stronger directional reward**
             if distance_to_target > 0.1:  # Avoid division by zero
                 target_direction = (np.array(target_pos) - head_pos) / distance_to_target
                 current_velocity = physics.named.data.sensordata['head_vel'][:2]
@@ -495,10 +519,10 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 if velocity_magnitude > 0.01:  # Only if actually moving
                     velocity_direction = current_velocity / velocity_magnitude
                     directional_alignment = np.dot(target_direction, velocity_direction)
-                    navigation_reward += directional_alignment * 0.3  # Reward for moving in right direction
+                    navigation_reward += directional_alignment * 1.0  # **INCREASED** from 0.3 to 1.0
         
-        # Combine rewards
-        total_reward = base_reward + navigation_reward
+        # **FIX 9: Weight navigation much higher than base movement**
+        total_reward = base_reward * 0.3 + navigation_reward * 1.0  # **REBALANCED**: nav >> base
         
         return total_reward
 
