@@ -33,6 +33,8 @@ def main():
                        help='Number of steps per video for evaluation')
     parser.add_argument('--model_type', choices=['biological_ncap', 'enhanced_ncap'], default='enhanced_ncap',
                        help='NCAP model type for curriculum training')
+    parser.add_argument('--use-locomotion-only-early-training', type=bool, default=True,
+                       help='Use locomotion-only mode for early training phases to master basic swimming first')
     
     args = parser.parse_args()
     
@@ -65,7 +67,8 @@ def main():
             log_episodes=args.log_episodes,
             resume_from_checkpoint=args.resume_checkpoint,
             model_type=args.model_type,
-            algorithm=args.algorithm
+            algorithm=args.algorithm,
+            use_locomotion_only_early_training=args.use_locomotion_only_early_training
         )
         trainer.train()
     elif args.mode == 'evaluate_curriculum':
@@ -79,7 +82,8 @@ def main():
             training_steps=0,  # No training
             resume_from_checkpoint=args.resume_checkpoint,
             model_type=args.model_type,
-            algorithm=args.algorithm
+            algorithm=args.algorithm,
+            use_locomotion_only_early_training=args.use_locomotion_only_early_training
         )
         trainer.evaluate_only(
             eval_episodes=args.eval_episodes,

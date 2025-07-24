@@ -61,7 +61,8 @@ class CurriculumNCAPTrainer:
                  biological_constraint_frequency=25000,  # **REDUCED** frequency: every 25k steps
                  resume_from_checkpoint=None,  # Path to checkpoint to resume from
                  model_type='enhanced_ncap',  # Model type: biological_ncap, enhanced_ncap
-                 algorithm='ppo'):  # Algorithm for naming
+                 algorithm='ppo',  # Algorithm for naming
+                 use_locomotion_only_early_training=True):  # **NEW**: Use pure locomotion for first 30% of training
         
         self.n_links = n_links
         self.learning_rate = learning_rate
@@ -76,6 +77,7 @@ class CurriculumNCAPTrainer:
         self.resume_from_checkpoint = resume_from_checkpoint
         self.model_type = model_type
         self.algorithm = algorithm
+        self.use_locomotion_only_early_training = use_locomotion_only_early_training
         
         # Initialize artifact namer for consistent naming across all outputs
         self.artifact_namer = ArtifactNamer(
@@ -142,17 +144,27 @@ class CurriculumNCAPTrainer:
         """Create NCAP model optimized for curriculum learning based on model_type."""
         n_joints = self.n_links - 1  # 4 joints for 5-link swimmer
         
+        # **NEW**: Determine if we should use locomotion-only mode for early training
+        training_progress = self.current_step / self.training_steps
+        use_locomotion_only = (self.use_locomotion_only_early_training and 
+                             training_progress < 0.3)  # First 30% of training
+        
         if self.model_type == 'enhanced_ncap':
             model = EnhancedBiologicalNCAPSwimmer(
                 n_joints=n_joints,
                 oscillator_period=self.oscillator_period,
                 include_environment_adaptation=True,  # Dramatic frequency adaptation
-                include_goal_direction=True  # Goal-directed navigation with anti-tail-chasing fixes
+                include_goal_direction=not use_locomotion_only,  # **DISABLED** for early training
+                locomotion_only_mode=use_locomotion_only,  # **NEW**: Pure swimming mode
+                action_scaling_factor=1.8  # **NEW**: Increased scaling for stronger swimming
             ).to(self.device)
             
             print(f"🚀 Created ENHANCED Biological NCAP model with {sum(p.numel() for p in model.parameters())} parameters")
             print(f"🔬 Relaxation oscillator: Asymmetric (60/40 phase) with 5x frequency adaptation")
-            print(f"🎯 Goal-directed navigation: Target-seeking with anti-tail-chasing fixes")
+            if use_locomotion_only:
+                print(f"🏊 TRAINING MODE: Pure locomotion (first 30% of training)")
+            else:
+                print(f"🎯 Goal-directed navigation: Target-seeking with anti-tail-chasing fixes")
             print(f"📄 Based on C. elegans research: https://elifesciences.org/articles/69905")
             
         elif self.model_type == 'biological_ncap':

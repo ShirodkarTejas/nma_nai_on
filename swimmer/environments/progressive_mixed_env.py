@@ -52,19 +52,19 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         self._environment_transitions = 0
         
     def _get_adaptive_target_timeout(self):
-        """Calculate adaptive target timeout based on training progress and target distances - MUCH MORE AGGRESSIVE."""
+        """Calculate adaptive target timeout - **BALANCED** with timeout penalties."""
         if self._training_progress < 0.3:
-            # Phase 1: Pure swimming - **REDUCED** timeout to prevent timeout rewards
-            return 600  # **REDUCED** from 1200 to 600 (20 seconds instead of 40)
+            # Phase 1: Pure swimming - **INCREASED** to allow learning after removing timeout rewards
+            return 900  # **INCREASED** from 600 to 900 (30 seconds) - penalties motivate speed
         elif self._training_progress < 0.6:
             # Phase 2: Single land zone - reasonable timeout for crawling
-            return 900  # **REDUCED** from 1500 to 900 (30 seconds)  
+            return 1200  # **INCREASED** from 900 to 1200 (40 seconds)  
         elif self._training_progress < 0.8:
             # Phase 3: Two land zones - moderate timeout for complex navigation
-            return 1200  # **REDUCED** from 1800 to 1200 (40 seconds)
+            return 1500  # **INCREASED** from 1200 to 1500 (50 seconds)
         else:
-            # Phase 4: Full complexity - still challenging but achievable
-            return 1500  # **REDUCED** from 2100 to 1500 (50 seconds)
+            # Phase 4: Full complexity - challenging but achievable
+            return 1800  # **INCREASED** from 1500 to 1800 (60 seconds)
     
     def _get_progressive_land_zones(self):
         """Get land zones based on training progress - designed for deep crawling training."""
@@ -506,13 +506,13 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     except ImportError:
                         pass  # Silent if tqdm not available
                 else:
-                    # **MUCH REDUCED** timeout reward to discourage exploitation  
-                    navigation_reward += 0.05  # **FURTHER REDUCED** from 0.1 to 0.05
+                    # **ELIMINATED** timeout reward - now apply penalty to discourage slow movement
+                    navigation_reward -= 1.0  # **PENALTY** for failing to reach target
                     # **ENHANCED**: Log every timeout with distance info for debugging
                     try:
                         from tqdm import tqdm
                         timeout_seconds = adaptive_timeout / 30.0  # Convert to seconds (assuming 30 FPS) 
-                        tqdm.write(f"⏰ TIMEOUT #{self._targets_reached + 1}: {distance_to_target:.2f}m remaining after {timeout_seconds:.1f}s - NOT REACHED")
+                        tqdm.write(f"⏰ TIMEOUT #{self._targets_reached + 1}: {distance_to_target:.2f}m remaining after {timeout_seconds:.1f}s - PENALTY APPLIED")
                     except ImportError:
                         pass  # Silent if tqdm not available
                 

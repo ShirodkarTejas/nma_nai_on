@@ -122,19 +122,24 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
     3. Dramatic frequency adaptation (3-5x changes)
     4. Proprioceptive threshold switching
     5. Target-seeking behavior
+    6. **NEW**: Locomotion-only mode for interference-free training
     """
     
     def __init__(self, n_joints, oscillator_period=60,
                  use_weight_sharing=True, use_weight_constraints=True,
                  include_proprioception=True, include_head_oscillators=True,
-                 include_environment_adaptation=True, include_goal_direction=True):
+                 include_environment_adaptation=True, include_goal_direction=True,
+                 locomotion_only_mode=False,  # **NEW**: Pure locomotion training mode
+                 action_scaling_factor=1.5):  # **NEW**: Scale final torques for stronger swimming
         super().__init__()
         self.n_joints = n_joints
         self.base_oscillator_period = oscillator_period
         self.include_proprioception = include_proprioception
         self.include_head_oscillators = include_head_oscillators
         self.include_environment_adaptation = include_environment_adaptation
-        self.include_goal_direction = include_goal_direction
+        self.include_goal_direction = include_goal_direction and not locomotion_only_mode  # **DISABLE** goal direction in locomotion mode
+        self.locomotion_only_mode = locomotion_only_mode  # **NEW**: Flag for pure locomotion training
+        self.action_scaling_factor = action_scaling_factor  # **NEW**: Scale actions for stronger movement
         
         # Device setup
         self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -200,7 +205,7 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
             
             print(f"✅ Enhanced biological adaptation with dramatic frequency changes")
         
-        # **GOAL-DIRECTED NAVIGATION** (new feature)
+        # **GOAL-DIRECTED NAVIGATION** (disabled in locomotion_only_mode)
         if self.include_goal_direction:
             # Goal-directed bias parameters (like chemotaxis in C. elegans)
             self.goal_sensitivity = nn.Parameter(torch.tensor(0.3))          # How much goals affect oscillator
@@ -208,6 +213,8 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
             self.directional_bias = 0.0  # Current goal-directed bias
             
             print(f"✅ Goal-directed navigation with sensory-motor integration")
+        elif self.locomotion_only_mode:
+            print(f"🏊 LOCOMOTION-ONLY MODE: Goal-directed navigation DISABLED for pure swimming training")
         
         # Move to device
         self.to(self._device)
@@ -229,29 +236,29 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
         with torch.no_grad():
             for name, param in self.params.items():
                 if 'muscle_contra' in name or any(x in name for x in ['d_v', 'v_d']):
-                    # Inhibitory parameters: constrain to [-1, 0]
-                    param.data = torch.clamp(param.data, -1.0, 0.0)
+                    # Inhibitory parameters: **RELAXED** constraints for stronger inhibition
+                    param.data = torch.clamp(param.data, -2.0, 0.0)  # **INCREASED** from -1.0 to -2.0
                 else:
-                    # Excitatory parameters: constrain to [0, 1]
-                    param.data = torch.clamp(param.data, 0.0, 1.0)
+                    # Excitatory parameters: **RELAXED** constraints for stronger excitation
+                    param.data = torch.clamp(param.data, 0.0, 2.0)  # **INCREASED** from 1.0 to 2.0
             
-            # Constrain adaptation parameters
+            # Constrain adaptation parameters with **INCREASED** amplitude scaling
             if self.include_environment_adaptation:
-                self.water_frequency_scale.data = torch.clamp(self.water_frequency_scale.data, 1.5, 3.0)
+                self.water_frequency_scale.data = torch.clamp(self.water_frequency_scale.data, 1.5, 4.0)  # **INCREASED** max from 3.0 to 4.0
                 self.land_frequency_scale.data = torch.clamp(self.land_frequency_scale.data, 0.2, 0.8)
-                self.water_amplitude_scale.data = torch.clamp(self.water_amplitude_scale.data, 0.8, 1.5)
-                self.land_amplitude_scale.data = torch.clamp(self.land_amplitude_scale.data, 0.5, 1.2)
+                self.water_amplitude_scale.data = torch.clamp(self.water_amplitude_scale.data, 1.0, 2.5)  # **INCREASED** range from 0.8-1.5 to 1.0-2.5
+                self.land_amplitude_scale.data = torch.clamp(self.land_amplitude_scale.data, 0.5, 1.5)  # **INCREASED** max from 1.2 to 1.5
             
             if self.include_goal_direction:
                 self.goal_sensitivity.data = torch.clamp(self.goal_sensitivity.data, 0.05, 0.2)  # REDUCED range
                 self.goal_persistence.data = torch.clamp(self.goal_persistence.data, 0.02, 0.1)  # REDUCED range
                 
-            # **ADDITIONAL SAFETY CONSTRAINTS** - Prevent tail-chasing parameter drift
+            # **RELAXED CONSTRAINTS** - Allow stronger parameters for better swimming performance
             for name, p in self.params.items():
                 if 'osc' in name:  # Oscillator parameters
-                    p.data = torch.clamp(p.data, 0.0, 0.8)  # Reduced max oscillator strength
+                    p.data = torch.clamp(p.data, 0.0, 2.0)  # **INCREASED** from 0.8 to 2.0 for stronger oscillations
                 elif 'prop' in name:  # Proprioceptive parameters  
-                    p.data = torch.clamp(p.data, 0.0, 0.6)  # Reduced max proprioceptive strength
+                    p.data = torch.clamp(p.data, 0.0, 1.5)  # **INCREASED** from 0.6 to 1.5 for stronger coupling
     
     def forward(self, joint_pos, environment_type=None, target_direction=None, timesteps=None, **kwargs):
         """
@@ -502,8 +509,11 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
         # **ENHANCED BIOLOGICAL AMPLITUDE SCALING**
         final_torques = base_torques * amplitude_scale
         
-        # 6. FINAL BOUNDS (ensure output is in [-1, 1] as in proper NCAP)
+        # 6. FINAL BOUNDS (ensure biological range is maintained)
         final_torques = torch.clamp(final_torques, -1.0, 1.0)
+        
+        # **NEW**: Apply action scaling for stronger swimming after normalization
+        final_torques = final_torques * self.action_scaling_factor
         
         # Add small exploration noise during training
         if self.training:
