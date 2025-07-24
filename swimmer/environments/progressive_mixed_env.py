@@ -428,9 +428,15 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             # **FIXED**: Set initial distance when target visit timer starts (including first step)
             if self._target_visit_timer == 0:  # Very first step with this target
                 self._initial_target_distance = distance_to_target
+                # **ENHANCED DEBUG**: Log initial distance capture
+                try:
+                    from tqdm import tqdm
+                    tqdm.write(f"🎯 NEW TARGET #{self._targets_reached + 1}: Initial distance = {distance_to_target:.3f}m")
+                except ImportError:
+                    pass
             
-            # Track swimming performance for debugging (every 300 steps = 10 seconds)
-            if self._target_visit_timer > 0 and self._target_visit_timer % 300 == 0:
+            # Track swimming performance for debugging (every 150 steps = 5 seconds for more frequent logging)
+            if self._target_visit_timer > 0 and self._target_visit_timer % 150 == 0:
                 if hasattr(self, '_initial_target_distance'):
                     distance_traveled = max(0, self._initial_target_distance - distance_to_target)
                     time_elapsed = self._target_visit_timer / 30.0  # Convert to seconds
@@ -441,6 +447,14 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                         from tqdm import tqdm
                         current_target_info = f"Target #{self._targets_reached + 1}"
                         tqdm.write(f"🏊 Swimming analysis {current_target_info}: {distance_traveled:.2f}m in {time_elapsed:.1f}s = {actual_speed:.3f}m/s (target: 0.15m/s)")
+                    except ImportError:
+                        pass
+                else:
+                    # **FALLBACK**: If initial distance wasn't captured, set it now as fallback
+                    self._initial_target_distance = distance_to_target
+                    try:
+                        from tqdm import tqdm
+                        tqdm.write(f"⚠️ FALLBACK: Setting initial distance for target #{self._targets_reached + 1} = {distance_to_target:.3f}m (was missing)")
                     except ImportError:
                         pass
             
@@ -466,6 +480,20 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             time_limit_reached = self._target_visit_timer > adaptive_timeout  # **REDUCED** timeout
             
             if target_reached or time_limit_reached:
+                # **FINAL SWIMMING ANALYSIS**: Log performance for every target completion
+                if hasattr(self, '_initial_target_distance'):
+                    distance_traveled = max(0, self._initial_target_distance - distance_to_target)
+                    time_elapsed = self._target_visit_timer / 30.0  # Convert to seconds
+                    actual_speed = distance_traveled / time_elapsed if time_elapsed > 0 else 0
+                    
+                    try:
+                        from tqdm import tqdm
+                        current_target_info = f"Target #{self._targets_reached + 1}"
+                        completion_type = "REACHED" if target_reached else "TIMEOUT"
+                        tqdm.write(f"🏊 Swimming analysis {current_target_info} [{completion_type}]: {distance_traveled:.2f}m in {time_elapsed:.1f}s = {actual_speed:.3f}m/s (target: 0.15m/s)")
+                    except ImportError:
+                        pass
+                
                 if target_reached:
                     navigation_reward += 10.0  # **MASSIVE INCREASE** from 2.0 to 10.0
                     # **ENHANCED**: Log every target reach with more detail for debugging

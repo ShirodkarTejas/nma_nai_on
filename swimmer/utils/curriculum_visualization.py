@@ -44,7 +44,7 @@ def add_minimap(frame, land_zones, swimmer_pos, frame_width, frame_height):
         
         # Convert to minimap coordinates
         map_x = int(norm_x * minimap_size)
-        map_y = int(norm_y * minimap_size)  # No Y flip - maintain physics orientation in minimap
+        map_y = int((1.0 - norm_y) * minimap_size)  #Y flip to match screen coordinates (away from camera = top)
         
         # Clamp to bounds
         map_x = max(0, min(minimap_size - 1, map_x))
@@ -109,7 +109,7 @@ def add_minimap_with_trail(frame, land_zones, position_history, frame_width, fra
         
         # Convert to minimap coordinates
         map_x = int(norm_x * minimap_size)
-        map_y = int(norm_y * minimap_size)  # No Y flip - maintain physics orientation in minimap
+        map_y = int((1.0 - norm_y) * minimap_size)  # Y flip to match screen coordinates (away from camera = top)
         
         # Clamp to bounds
         map_x = max(0, min(minimap_size - 1, map_x))
@@ -360,7 +360,7 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
                 
                 # Convert target position to screen coordinates
                 target_screen_x = int((target_pos[0] + 6.0) / x_range * width)
-                target_screen_y = int(height - (target_pos[1] + 4.0) / y_range * height)  # Flip Y for screen coords
+                target_screen_y = int(height - ((target_pos[1] + 4.0) / y_range * height))  # Correct Y flip for screen coords
                 
                 if 0 <= target_screen_x < width and 0 <= target_screen_y < height:
                     if i == current_target_index:
@@ -371,8 +371,8 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
                         else:
                             color = (0, pulse_intensity, 0)    # Bright green for land targets
                         
-                        # Draw target radius (1.5m) to show scale
-                        target_radius_pixels = int(1.5 / 12.0 * width)  # 1.5m target radius
+                        # Draw target radius (0.8m) to show actual scale used by environment
+                        target_radius_pixels = int(0.8 / 12.0 * width)  # 0.8m target radius (matches environment)
                         cv2.circle(frame_with_zones, (target_screen_x, target_screen_y), target_radius_pixels, 
                                   color, 2)  # Show the actual target area
                         cv2.circle(frame_with_zones, (target_screen_x, target_screen_y), target_radius_pixels, 
@@ -388,7 +388,7 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                         
                         # Add radius label
-                        cv2.putText(frame_with_zones, "1.5m radius", 
+                        cv2.putText(frame_with_zones, "0.8m radius", 
                                   (target_screen_x-40, target_screen_y+35), 
                                   cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
                     elif i < current_target_index:
@@ -908,19 +908,31 @@ def add_zone_indicators(frame, env, step_count, minimap=True):
                 x_range = 12.0  # -6 to 6 (wider than previous -5 to 5)
                 y_range = 8.0   # -4 to 4 (wider than previous -3 to 3)
                 
+                # **ENHANCED DEBUG**: Check coordinate bounds before conversion
+                if step_count < 2:
+                    print(f"🔍 Coordinate mapping debug:")
+                    print(f"   Frame dimensions: {width}x{height}")
+                    print(f"   Physics range: X=[-6,+6], Y=[-4,+4]")
+                    print(f"   All zones fit within bounds: {all(-6 <= zone['center'][0] <= 6 and -4 <= zone['center'][1] <= 4 for zone in land_zones)}")
+                
                 # Add land zone overlays
                 for i, zone in enumerate(land_zones):
                     center_x, center_y = zone['center']
                     radius = zone['radius']
                     
-                    # Convert to screen coordinates with wider view
+                    # Convert to screen coordinates with proper mapping
+                    # Physics coordinate system: X=[-6,+6], Y=[-4,+4]
+                    # Screen coordinate system: X=[0,width), Y=[0,height) where Y=0 is top
                     screen_x = int((center_x + 6.0) / x_range * width)
-                    screen_y = int(height - (center_y + 4.0) / y_range * height)  # Flip Y for screen coords
+                    screen_y = int(height - ((center_y + 4.0) / y_range * height))  # Correct Y flip for screen coords
                     screen_radius = max(10, int(radius / x_range * width))  # Minimum visible radius
                     
-                    # Debug: Print coordinate conversion (reduced for video creation)
+                    # **ENHANCED DEBUG**: Print coordinate conversion with bounds checking
                     if step_count < 1:  # Reduced from 3 to 1
-                        print(f"   Zone {i} coords: physics=({center_x}, {center_y}, r={radius}) → screen=({screen_x}, {screen_y}, r={screen_radius})")
+                        in_bounds = (0 <= screen_x < width and 0 <= screen_y < height)
+                        print(f"   Zone {i} coords: physics=({center_x}, {center_y}, r={radius}) → screen=({screen_x}, {screen_y}, r={screen_radius}) {'✅' if in_bounds else '❌ OUT OF BOUNDS'}")
+                        if not in_bounds:
+                            print(f"     Expected bounds: X=[0,{width}), Y=[0,{height})")
                     
                     # Ensure coordinates are within frame bounds
                     if 0 <= screen_x < width and 0 <= screen_y < height:
@@ -943,6 +955,10 @@ def add_zone_indicators(frame, env, step_count, minimap=True):
                                     (label_x + label_size[0]+3, label_y+3), (255, 255, 255), -1)
                         cv2.putText(frame_with_zones, label, (label_x, label_y), 
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (139, 69, 19), 2)
+                    else:
+                        # **NEW**: Log zones that are out of bounds for debugging
+                        if step_count < 1:
+                            print(f"   ⚠️ Zone {i} is outside frame bounds and will not be drawn")
         
         # Note: Target visualization removed from simple zone indicators
         # Use add_zone_indicators_with_trail for full target visualization

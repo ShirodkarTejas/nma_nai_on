@@ -97,9 +97,34 @@ class TrainingLogger:
         if max_velocity is not None:
             self.log_metric('max_velocity', max_velocity)
     
-    def log_training_step(self, loss=None, policy_loss=None, value_loss=None, 
+    def log_training_step(self, data_dict=None, loss=None, policy_loss=None, value_loss=None, 
                          entropy=None, learning_rate=None):
-        """Log training step metrics."""
+        """Log training step metrics - accepts either dict or individual parameters."""
+        # **FIXED**: Handle dictionary input from curriculum trainer
+        if data_dict is not None:
+            # Extract episode-level data
+            if 'episode' in data_dict:
+                self.current_episode = max(self.current_episode, data_dict['episode'])
+            if 'step' in data_dict:
+                self.current_step = max(self.current_step, data_dict['step'])
+            
+            # Log episode reward and distance if present
+            if 'reward' in data_dict:
+                self.log_metric('episode_reward', data_dict['reward'])
+            if 'distance' in data_dict:
+                self.log_metric('episode_distance', data_dict['distance'])
+            
+            # Log other metrics
+            if 'mean_reward_10' in data_dict:
+                self.log_metric('mean_reward_10', data_dict['mean_reward_10'])
+            if 'mean_distance_10' in data_dict:
+                self.log_metric('mean_distance_10', data_dict['mean_distance_10'])
+            if 'phase' in data_dict:
+                self.log_metric('phase', data_dict['phase'])
+            if 'progress' in data_dict:
+                self.log_metric('progress', data_dict['progress'])
+        
+        # Handle individual parameters (original functionality)
         if loss is not None:
             self.log_metric('loss', loss)
         if policy_loss is not None:
@@ -111,7 +136,9 @@ class TrainingLogger:
         if learning_rate is not None:
             self.log_metric('learning_rate', learning_rate)
         
-        self.current_step += 1
+        # Only increment step counter if not already set by data_dict
+        if data_dict is None or 'step' not in data_dict:
+            self.current_step += 1
     
     def save_metrics(self):
         """Save all metrics to file."""
