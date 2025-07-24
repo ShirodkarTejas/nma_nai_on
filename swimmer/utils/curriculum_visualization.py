@@ -1231,7 +1231,7 @@ def create_test_video(agent, env, save_path, num_steps=300, episode_name="Test E
             if frame is not None:
                 # Add enhanced flat disk zone indicators (no clipping issues!)
                 frame_with_zones = add_enhanced_zone_disks(
-                    frame, env, step, show_minimap
+                    frame, env, step, minimap=show_minimap
                 )
                 frames.append(frame_with_zones)
         except Exception as e:
@@ -1334,7 +1334,7 @@ def create_phase_comparison_video(agent, env, save_path, phases_to_test=None, ph
                     if frame is not None:
                         # Use enhanced flat disk zone indicators for phase comparison (no clipping!)
                         frame_with_zones = add_enhanced_zone_disks(
-                            frame, env, step, show_minimap=True
+                            frame, env, step, minimap=True
                         )
                         phase_frames.append(frame_with_zones)
                     

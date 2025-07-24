@@ -1,21 +1,21 @@
 
 === TRAINING SUMMARY REPORT ===
 Experiment: enhanced_ncap_ppo_5links_oscillator_period60_training_modecurriculum
-Duration: 16.68 minutes
-Total Episodes: 20
-Total Training Steps: 20000
+Duration: 8.13 minutes
+Total Episodes: 5
+Total Training Steps: 5000
 
 === PERFORMANCE METRICS ===
 Rewards:
-  - Average: 1297.2340
-  - Maximum: 1398.4211
-  - Minimum: 1148.3253
-  - Final: 1393.5961
+  - Average: -6.9557
+  - Maximum: -6.9557
+  - Minimum: -6.9557
+  - Final: -6.9557
 
 Distances:
-  - Average: 0.4763
-  - Maximum: 0.5169
-  - Final: 0.5169
+  - Average: 0.4779
+  - Maximum: 0.4779
+  - Final: 0.4779
 
 === CONFIGURATION ===
 

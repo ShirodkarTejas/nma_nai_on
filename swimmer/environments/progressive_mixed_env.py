@@ -86,7 +86,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             ]
     
     def _get_progressive_targets(self):
-        """Get navigation targets designed for comprehensive swim/crawl/transition training."""
+        """Get navigation targets designed to FORCE comprehensive swim/crawl/transition training."""
         if self._training_progress < 0.3:
             # Phase 1: Pure swimming mastery - Moderate distances for 5-link swimmer
             return [
@@ -96,42 +96,46 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 {'position': [1.5, -1.2], 'type': 'swim'}   # Return path (diagonal ~1.9m)
             ]
         elif self._training_progress < 0.6:
-            # Phase 2: Deep land crawling training (land zone: center=[3.0, 0], radius=1.8)
+            # Phase 2: **FORCE** deep land crawling - targets require going through land zone
+            # Land zone: center=[3.0, 0], radius=1.8 (covers x=1.2 to x=4.8)
             return [
-                {'position': [1.5, 0], 'type': 'swim'},     # Approach in water
-                {'position': [2.5, 0], 'type': 'land'},     # Enter land zone (edge)
-                {'position': [3.5, 0], 'type': 'land'},     # Deep in land (requires crawling)
-                {'position': [3.0, 0.8], 'type': 'land'},   # Crawl within land (north side)
-                {'position': [3.0, -0.8], 'type': 'land'},  # Crawl within land (south side) 
-                {'position': [4.0, 0], 'type': 'land'},     # Far edge of land
-                {'position': [5.0, 0], 'type': 'swim'}      # Exit to water
+                {'position': [4.5, 0], 'type': 'land'},     # **MANDATORY** deep land target - can't reach via water
+                {'position': [3.0, 1.2], 'type': 'land'},   # North edge of land (requires crawling)
+                {'position': [3.0, -1.2], 'type': 'land'},  # South edge of land (requires crawling) 
+                {'position': [4.0, 0.8], 'type': 'land'},   # Deep northeast land (requires traversal)
+                {'position': [4.0, -0.8], 'type': 'land'},  # Deep southeast land (requires traversal)
+                {'position': [2.0, 0], 'type': 'land'},     # West edge - must enter land to reach
+                {'position': [1.0, 0], 'type': 'swim'},     # Exit back to water (reward land→water transition)
+                {'position': [5.5, 0], 'type': 'swim'}      # Far water target (reward land→water escape)
             ]
         elif self._training_progress < 0.8:
-            # Phase 3: Cross-land traversal and zone switching (two zones: [-2.0,0] & [3.5,0])
+            # Phase 3: **FORCE** cross-land traversal - impossible to avoid both land zones
+            # Two zones: left [-2.0,0] radius=1.5, right [3.5,0] radius=1.5
             return [
-                {'position': [-1.0, 0], 'type': 'land'},    # Enter left land zone
-                {'position': [-2.5, 0], 'type': 'land'},    # Deep in left land (requires crawling)
-                {'position': [-1.5, 0.8], 'type': 'land'},  # North edge of left land
-                {'position': [0.5, 0], 'type': 'swim'},     # Cross water between zones
-                {'position': [2.8, 0], 'type': 'land'},     # Enter right land zone
-                {'position': [4.2, 0], 'type': 'land'},     # Deep in right land (requires crawling)
-                {'position': [3.5, -1.0], 'type': 'land'},  # South edge of right land
-                {'position': [5.5, 0], 'type': 'swim'}      # Final water target
+                {'position': [-3.2, 0], 'type': 'land'},    # **FORCE** deep left land - no water path
+                {'position': [-2.0, 1.0], 'type': 'land'},  # North edge left land
+                {'position': [-2.0, -1.0], 'type': 'land'}, # South edge left land
+                {'position': [0.75, 0], 'type': 'swim'},    # **NARROW** water gap between zones
+                {'position': [4.8, 0], 'type': 'land'},     # **FORCE** deep right land - no water path
+                {'position': [3.5, 1.2], 'type': 'land'},   # North edge right land  
+                {'position': [3.5, -1.2], 'type': 'land'},  # South edge right land
+                {'position': [6.0, 0], 'type': 'swim'}      # Far water exit (reward land escape)
             ]
         else:
-            # Phase 4: Complex island hopping requiring all three skills
+            # Phase 4: **FORCE** complex island hopping - water-only paths impossible
+            # Islands: left [-3.0,0] r=1.2, north [0,2.0] r=1.0, right [3.0,0] r=1.2, south [0,-2.0] r=1.0
             return [
-                {'position': [-2.5, 0], 'type': 'land'},    # Left island deep
-                {'position': [-3.5, 0.5], 'type': 'land'},  # Left island edge
-                {'position': [-1.0, 1.5], 'type': 'swim'},  # Swim to north island
-                {'position': [0.0, 2.8], 'type': 'land'},   # North island deep
+                {'position': [-4.0, 0], 'type': 'land'},    # **DEEP** left island - forces land entry
+                {'position': [-3.0, 1.0], 'type': 'land'},  # Left island edge
+                {'position': [-1.0, 1.8], 'type': 'swim'},  # **FORCE** swim to north island approach
+                {'position': [0.0, 2.8], 'type': 'land'},   # **DEEP** north island - forces land entry
                 {'position': [0.8, 2.0], 'type': 'land'},   # North island edge
-                {'position': [2.0, 1.0], 'type': 'swim'},   # Swim to right island
-                {'position': [3.8, 0], 'type': 'land'},     # Right island deep
+                {'position': [2.2, 1.0], 'type': 'swim'},   # **FORCE** swim to right island approach
+                {'position': [4.0, 0], 'type': 'land'},     # **DEEP** right island - forces land entry
                 {'position': [3.0, -0.8], 'type': 'land'},  # Right island edge
-                {'position': [1.0, -1.5], 'type': 'swim'},  # Swim to south island
-                {'position': [0.0, -2.5], 'type': 'land'},  # South island deep
-                {'position': [0.0, 0], 'type': 'swim'}      # Return to center
+                {'position': [1.0, -1.8], 'type': 'swim'},  # **FORCE** swim to south island approach
+                {'position': [0.0, -2.8], 'type': 'land'},  # **DEEP** south island - forces land entry
+                {'position': [0.0, 0], 'type': 'swim'}      # Return to center (mixed traversal required)
             ]
 
     def initialize_episode(self, physics):
@@ -571,16 +575,16 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         return obs
 
     def get_reward(self, physics):
-        """Enhanced reward with goal-directed navigation - FIXED to prevent reward hacking."""
+        """Enhanced reward with goal-directed navigation - FIXED to encourage land zone usage."""
         head_pos = physics.named.data.xpos['head'][:2]
         forward_velocity = -physics.named.data.sensordata['head_vel'][1]
         
-        # **ANTI-HACK FIX: Eliminate base movement rewards to prevent circular swimming**
+        # **LAND AVOIDANCE FIX: Completely eliminate all movement penalties**
         if self._training_progress < 0.3:
             # Phase 1: Only reward target approach, NO base swimming reward
-            base_reward = 0.0  # **ELIMINATED** circular swimming rewards
+            base_reward = 0.0  # Pure navigation focus
         else:
-            # Phase 2+: Mixed environment reward
+            # Phase 2+: Mixed environment reward - ENCOURAGE both environments
             # Determine current environment
             in_land = False
             for zone in self._current_land_zones:
@@ -590,34 +594,54 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     break
             
             if in_land:
-                # **ANTI-HACK FIX: Only reward land activity in context of target navigation**
                 joint_velocities = physics.data.qvel
                 joint_activity = np.sum(np.abs(joint_velocities))
-                
-                # **MINIMAL** base land reward - only for encouraging crawling movement
                 activity_reward = rewards.tolerance(
                     joint_activity,
-                    bounds=(0.05, float('inf')),  # **REDUCED** threshold to encourage any movement
+                    bounds=(0.05, float('inf')),
                     margin=0.05,
                     value_at_margin=0.,
                     sigmoid='linear',
-                ) * 0.1  # **MINIMAL** reward - navigation should dominate
+                ) * 0.3  # INCREASED from 0.1 to 0.3 - crawling should be rewarded
+                # **ELIMINATED**: No efficiency penalties for land movement
+                base_reward = activity_reward  # Only positive rewards for land activity
                 
-                # **MINIMAL**: Efficiency penalty
-                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.00005  # **MINIMAL** penalty
-                
-                base_reward = activity_reward + efficiency_penalty
+                # **NEW: Log when swimmer is on land for debugging**
+                if not hasattr(self, '_last_on_land') or not self._last_on_land:
+                    try:
+                        from tqdm import tqdm
+                        tqdm.write(f"🏝️ Swimmer entered LAND zone - crawling mode activated")
+                    except ImportError:
+                        pass
+                self._last_on_land = True
             else:
-                # **ANTI-HACK FIX: Eliminate water base rewards to prevent circular swimming**
-                base_reward = 0.0  # **ELIMINATED** circular swimming rewards
+                # **FIX: Remove water penalties too - equal treatment**
+                base_reward = 0.0  # No penalties, no base rewards - navigation dominates
                 
-                # **REDUCED**: Minor efficiency penalty to encourage purposeful movement
-                joint_velocities = physics.data.qvel
-                efficiency_penalty = -np.sum(np.square(joint_velocities)) * 0.00005  # **FURTHER REDUCED**
-                
-                base_reward = efficiency_penalty
+                # **NEW: Log when swimmer exits land**
+                if hasattr(self, '_last_on_land') and self._last_on_land:
+                    try:
+                        from tqdm import tqdm
+                        tqdm.write(f"🌊 Swimmer returned to WATER zone - swimming mode activated")
+                    except ImportError:
+                        pass
+                self._last_on_land = False
         
-        # **FIX 4: MASSIVELY increase goal-directed navigation rewards**
+        # **FIX: Add small baseline activity reward to prevent completely negative rewards**
+        joint_velocities = physics.data.qvel
+        joint_activity = np.sum(np.abs(joint_velocities))
+        baseline_activity_reward = min(joint_activity * 0.01, 0.1)  # Small positive reward for any movement
+        
+        # **FIX: Add environment diversity bonus**
+        environment_diversity_bonus = 0.0
+        if self._training_progress >= 0.3 and hasattr(self, '_environment_transitions'):
+            # Reward for using both environments (transitions indicate mixed locomotion)
+            if self._environment_transitions > 0:
+                # Bonus for successfully transitioning between environments
+                diversity_bonus = min(self._environment_transitions * 0.5, 3.0)  # Max 3.0 bonus
+                environment_diversity_bonus = diversity_bonus
+        
+        # **MASSIVELY increase goal-directed navigation rewards**
         navigation_reward = 0.0
         
         if self._current_targets and self._current_target_index < len(self._current_targets):
@@ -627,51 +651,63 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             # Distance to target
             distance_to_target = np.linalg.norm(head_pos - target_pos)
             
-            # **FIXED**: Set initial distance when target visit timer starts (including first step)
+            # **ENHANCED TARGET TYPE BONUS**: Encourage land targets more than water targets
+            target_type_multiplier = 1.0
+            if current_target['type'] == 'land':
+                target_type_multiplier = 1.5  # **NEW**: 50% bonus for land targets
+                # Add extra bonus if currently in correct environment for target
+                current_in_land = any(np.linalg.norm(head_pos - zone['center']) < zone['radius'] for zone in self._current_land_zones)
+                if current_in_land:
+                    target_type_multiplier = 2.0  # **100% bonus for land targets when in land**
+            
+            # **FIXED**: Set initial distance when target visit timer starts
             if self._target_visit_timer == 0:  # Very first step with this target
                 self._initial_target_distance = distance_to_target
                 self._last_distance = distance_to_target  # Initialize for progress tracking
-                # **ENHANCED DEBUG**: Log initial distance capture with target details
+                # **ENHANCED DEBUG**: Log target details with environment context
                 try:
                     from tqdm import tqdm
-                    tqdm.write(f"🎯 NEW TARGET #{self._targets_reached + 1}: Position={target_pos}, Initial distance = {distance_to_target:.3f}m")
-                    # **DEBUG**: Show direction vector to help diagnose navigation issues
-                    head_pos = physics.named.data.xpos['head'][:2]
-                    direction_vector = np.array(target_pos) - head_pos
-                    tqdm.write(f"   Direction vector: {direction_vector} (swimmer at {head_pos})")
+                    target_env = "🏝️ LAND" if current_target['type'] == 'land' else "🌊 WATER"
+                    multiplier_info = f"(x{target_type_multiplier} multiplier)" if target_type_multiplier > 1.0 else ""
+                    tqdm.write(f"🎯 NEW TARGET #{self._targets_reached + 1}: {target_env} target at {target_pos}, distance = {distance_to_target:.3f}m {multiplier_info}")
+                    # Show current environment
+                    current_in_land = any(np.linalg.norm(head_pos - zone['center']) < zone['radius'] for zone in self._current_land_zones)
+                    current_env = "🏝️ LAND" if current_in_land else "🌊 WATER"
+                    tqdm.write(f"   Swimmer currently in: {current_env} environment")
+                    
+                    # **NEW: Log training phase and target types for debugging**
+                    current_phase = int(self._training_progress * 4)
+                    tqdm.write(f"   Training Phase: {current_phase} (progress: {self._training_progress:.3f})")
+                    if len(self._current_targets) > 0:
+                        land_targets = [t for t in self._current_targets if t['type'] == 'land']
+                        water_targets = [t for t in self._current_targets if t['type'] == 'swim']
+                        tqdm.write(f"   Phase targets: {len(land_targets)} land, {len(water_targets)} water")
                 except ImportError:
                     pass
             
-            # Track swimming performance for debugging (every 300 steps = 10 seconds for regular monitoring)
+            # Track progress monitoring
             if self._target_visit_timer > 0 and self._target_visit_timer % 300 == 0:
                 if hasattr(self, '_initial_target_distance'):
                     distance_traveled = max(0, self._initial_target_distance - distance_to_target)
                     time_elapsed = self._target_visit_timer / 30.0  # Convert to seconds
                     actual_speed = distance_traveled / time_elapsed if time_elapsed > 0 else 0
                     
-                    # **PROGRESS MONITORING**: Show current progress toward target with enhanced debugging
                     try:
                         from tqdm import tqdm
                         current_target_info = f"Target #{self._targets_reached + 1}"
                         progress_percent = (distance_traveled / self._initial_target_distance * 100) if self._initial_target_distance > 0 else 0
-                        tqdm.write(f"🏊 Progress update {current_target_info}: {distance_traveled:.2f}m/{self._initial_target_distance:.2f}m ({progress_percent:.1f}%) in {time_elapsed:.1f}s = {actual_speed:.3f}m/s")
-                        # **DEBUG**: Show current position vs target for diagnosis
-                        head_pos = physics.named.data.xpos['head'][:2]
-                        tqdm.write(f"   Position: {head_pos} → Target: {target_pos}, Current distance: {distance_to_target:.3f}m")
-                    except ImportError:
-                        pass
-                else:
-                    # **FALLBACK**: If initial distance wasn't captured, set it now as fallback
-                    self._initial_target_distance = distance_to_target
-                    try:
-                        from tqdm import tqdm
-                        tqdm.write(f"⚠️ FALLBACK: Setting initial distance for target #{self._targets_reached + 1} = {distance_to_target:.3f}m (was missing)")
+                        target_env = "🏝️ LAND" if current_target['type'] == 'land' else "🌊 WATER"
+                        
+                        # **FIX: Add warning for very distant targets that may be unreachable**
+                        if self._initial_target_distance > 3.0 and distance_traveled < 0.5:
+                            tqdm.write(f"⚠️ Progress update {current_target_info} ({target_env}): {distance_traveled:.2f}m/{self._initial_target_distance:.2f}m ({progress_percent:.1f}%) in {time_elapsed:.1f}s = {actual_speed:.3f}m/s")
+                            tqdm.write(f"   Warning: Target is very distant ({self._initial_target_distance:.1f}m) - may require advanced training")
+                        else:
+                            tqdm.write(f"🏊 Progress update {current_target_info} ({target_env}): {distance_traveled:.2f}m/{self._initial_target_distance:.2f}m ({progress_percent:.1f}%) in {time_elapsed:.1f}s = {actual_speed:.3f}m/s")
                     except ImportError:
                         pass
             
             # **ULTIMATE CIRCULAR SWIMMING FIX**: Reward progress, not proximity
-            # Problem: Agent gets 4.8/step for circling vs 10.0 once for reaching = circular swimming profitable
-            
             # Only reward actual progress toward target (not just being close)
             if hasattr(self, '_initial_target_distance') and self._initial_target_distance > 0:
                 progress_made = max(0, self._initial_target_distance - distance_to_target)
@@ -679,61 +715,49 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 
                 # Reward based on cumulative progress (diminishes over time spent)
                 time_factor = max(0.1, 1.0 - (self._target_visit_timer / 900.0))  # Decay over 30 seconds
-                progress_reward = progress_ratio * 2.0 * time_factor  # Max 2.0, diminishes with time
+                progress_reward = progress_ratio * 2.0 * time_factor * target_type_multiplier  # **APPLY TARGET BONUS**
                 navigation_reward += progress_reward
                 
                 # Small directional bonus only when making progress
                 if self._target_visit_timer > 30:  # After 1 second
                     recent_progress = max(0, self._last_distance - distance_to_target) if hasattr(self, '_last_distance') else 0
                     if recent_progress > 0.01:  # Actually moving toward target
-                        navigation_reward += 0.2  # Small bonus for continued progress
+                        navigation_reward += 0.2 * target_type_multiplier  # **APPLY TARGET BONUS**
                 
                 self._last_distance = distance_to_target
             else:
                 # Fallback: minimal approach reward
-                navigation_reward += 0.5 / (1.0 + distance_to_target)
+                navigation_reward += (0.5 / (1.0 + distance_to_target)) * target_type_multiplier
             
-            # Increment visit timer for auto-advance
+            # Increment visit timer
             self._target_visit_timer += 1
             
-            # **ULTIMATE ANTI-HACK FIX: ELIMINATE timeout target switching entirely**
-            # Agent MUST reach targets - no more reward hacking through timeouts!
+            # **ANTI-HACK FIX: ELIMINATE timeout target switching entirely**
             target_reached = distance_to_target < self._target_radius
             
             # Apply escalating penalties for taking too long (but DON'T switch targets!)
             if self._target_visit_timer > 600:  # 20 seconds
-                navigation_reward -= 0.02  # Small continuous penalty for being slow
+                navigation_reward -= 0.02  
             if self._target_visit_timer > 1200:  # 40 seconds  
-                navigation_reward -= 0.05  # Larger continuous penalty for being very slow
+                navigation_reward -= 0.05  
             if self._target_visit_timer > 1800:  # 60 seconds
-                navigation_reward -= 0.1   # Large continuous penalty for being extremely slow
+                navigation_reward -= 0.1   
             
             # ONLY advance target if actually reached
             if target_reached:
-                # **FINAL SWIMMING ANALYSIS**: Log performance for every target completion
-                # **FINAL SWIMMING ANALYSIS**: Log performance for actual target completion
-                if hasattr(self, '_initial_target_distance'):
-                    distance_traveled = max(0, self._initial_target_distance - distance_to_target)
-                    time_elapsed = self._target_visit_timer / 30.0  # Convert to seconds
-                    actual_speed = distance_traveled / time_elapsed if time_elapsed > 0 else 0
-                    
-                    try:
-                        from tqdm import tqdm
-                        current_target_info = f"Target #{self._targets_reached + 1}"
-                        tqdm.write(f"🏊 Swimming analysis {current_target_info} [REACHED]: {distance_traveled:.2f}m in {time_elapsed:.1f}s = {actual_speed:.3f}m/s (target: 0.15m/s)")
-                    except ImportError:
-                        pass
+                # **MASSIVE REWARD** for reaching target (with type bonus)
+                target_completion_reward = 10.0 * target_type_multiplier  # **LAND TARGETS WORTH MORE**
+                navigation_reward += target_completion_reward
                 
-                # **MASSIVE REWARD** for actually reaching target
-                navigation_reward += 10.0  # Big reward for genuine target reaching
-                
-                # **ENHANCED**: Log every target reach with more detail for debugging
+                # **ENHANCED**: Log target completion with environment info
                 try:
                     from tqdm import tqdm
                     time_taken = self._target_visit_timer / 30.0  # Convert to seconds
                     initial_distance = getattr(self, '_initial_target_distance', distance_to_target)
                     speed = initial_distance / time_taken if time_taken > 0 else 0
-                    tqdm.write(f"🎯 TARGET REACHED #{self._targets_reached + 1}: {distance_to_target:.2f}m in {time_taken:.1f}s (speed: {speed:.3f}m/s)")
+                    target_env = "🏝️ LAND" if current_target['type'] == 'land' else "🌊 WATER"
+                    reward_info = f"(+{target_completion_reward:.1f} reward)" if target_type_multiplier > 1.0 else f"(+{target_completion_reward:.1f} reward)"
+                    tqdm.write(f"🎯 TARGET REACHED #{self._targets_reached + 1}: {target_env} target in {time_taken:.1f}s (speed: {speed:.3f}m/s) {reward_info}")
                 except ImportError:
                     pass  # Silent if tqdm not available
                 
@@ -751,21 +775,20 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 if hasattr(self, '_last_distance'):
                     delattr(self, '_last_distance')
                 
-                # Only log phase completion, not every target transition
+                # Phase completion bonus
                 if self._current_target_index >= len(self._current_targets):
-                    # Completed all targets in this phase
                     if self._targets_reached % 100 == 0:  # Log every 100 completions
                         try:
                             from tqdm import tqdm
                             tqdm.write(f"🏆 Phase targets completed! ({self._targets_reached} total targets)")
                         except ImportError:
-                            pass  # Silent if tqdm not available
-                    navigation_reward += 20.0  # **INCREASED** from 5.0 to 20.0
+                            pass  
+                    navigation_reward += 20.0  
                     # Reset to first target for continuous cycling
                     self._current_target_index = 0
             
             # **ANTI-CIRCULAR FIX**: Only reward directional movement when making real progress
-            if distance_to_target > 0.1 and hasattr(self, '_last_distance'):  # Avoid division by zero
+            if distance_to_target > 0.1 and hasattr(self, '_last_distance'):  
                 recent_progress = self._last_distance - distance_to_target if hasattr(self, '_last_distance') else 0
                 
                 # Only give directional reward if actually getting closer to target
@@ -777,11 +800,11 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     if velocity_magnitude > 0.01:  # Only if actually moving
                         velocity_direction = current_velocity / velocity_magnitude
                         directional_alignment = np.dot(target_direction, velocity_direction)
-                        # Reduced directional reward - progress is already rewarded above
-                        navigation_reward += directional_alignment * 0.3  # **REDUCED** from 1.0 to 0.3
+                        # Apply target type bonus to directional rewards too
+                        navigation_reward += directional_alignment * 0.3 * target_type_multiplier
         
-        # **ANTI-HACK FIX: Navigation is now the ONLY significant reward source**
-        total_reward = base_reward * 0.05 + navigation_reward * 1.0  # **NAVIGATION DOMINANT**: 95% navigation
+        # **FINAL REWARD CALCULATION**: Navigation dominates, with diversity bonus, no penalties
+        total_reward = base_reward * 0.1 + navigation_reward * 1.0 + environment_diversity_bonus * 0.1 + baseline_activity_reward
         
         return total_reward
 
