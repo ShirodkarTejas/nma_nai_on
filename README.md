@@ -1,13 +1,45 @@
 # NCAP Swimmer: Biologically-Inspired Neural Control for Adaptive Locomotion
 
-## 🚀 **Current Status - Enhanced Training & Evaluation System** 
-*Last Updated: 23-07-2025*
+## 🚀 **Current Status - Enhanced Training & Reward System Analysis** 
+*Last Updated: 24-07-2025*
 
-### **✅ All Systems Ready + New Features**
+### **⚠️ Critical Reward System Discovery - Training Stagnation Resolved** 
+Recent curriculum training revealed fundamental issues with the incentive structure that were preventing effective learning:
+
+#### **🔍 Root Cause Analysis**
+- **Training Stagnation**: Only 1-5 episodes per phase completion despite 1M target episodes
+- **Reward Exploitation**: Original timeout system (40s) allowed agents to avoid targets and collect timeout rewards
+- **Target Avoidance**: 1.5m target radius + generous timeouts encouraged "reward hacking" over actual navigation
+- **Distance Performance**: Extremely low distances (0.4-0.5m) indicating no real locomotion learning
+
+#### **🛠️ Major Fixes Implemented** [[memory:4186768]]
+1. **Eliminated Timeout Exploitation**: 
+   - Removed automatic target switching after timeouts
+   - Reduced timeout rewards from 0.5 → 0.05 (nearly eliminated)
+   - Agents must actually reach targets to advance
+   
+2. **Stricter Target Requirements**:
+   - Target radius reduced from 1.5m → 0.8m (stricter completion)
+   - Timeout duration reduced from 40s → 20s (urgency pressure)
+   - Enhanced target type bonuses: Land targets worth 1.5-2.0x more reward
+   
+3. **Anti-Avoidance Mechanisms**:
+   - Removed action clamping that limited speed to 30% (prevented fast swimming)
+   - Fixed starting orientation to face +X direction (toward targets)
+   - Land zone penalties eliminated - equal treatment for water/land locomotion
+   
+4. **Biological Constraint Relaxation**:
+   - Oscillator sensitivity: 1.2 → 0.8 (more adaptive frequency changes)
+   - Coupling strength: 0.8 → 0.5 (flexible joint coordination)  
+   - Muscle parameters: 0.8 → 0.5 (stronger actuation capability)
+   - Constraint application frequency: every 5k → 25k steps (less restrictive)
+
+### **✅ All Systems Ready + Enhanced Incentive Design**
 - **🎯 Target Cycling Fixed**: All navigation targets now cycle properly (not stuck on target 1)
 - **🔄 Resume Training**: Seamless continuation from checkpoints (100k → 200k → 1M)
 - **📊 Evaluation-Only Mode**: Test visualization changes without retraining
 - **🏊 Enhanced Visibility**: Improved swimmer tracking and dynamic training status
+- **💰 Reward System Overhaul**: Navigation-focused rewards with land target bonuses
 - **Performance Target**: 5-15m distance (2-5 body lengths) for expert swim+crawl
 - **Training Command**: `python main.py --mode train_curriculum --training_steps 1000000 --model_type enhanced_ncap`
 - **Resume Command**: `python main.py --mode train_curriculum --training_steps 200000 --resume_checkpoint outputs/enhanced_ncap/checkpoints/enhanced_ncap_*_checkpoint_step_100000.pt --model_type enhanced_ncap`
@@ -521,6 +553,38 @@ python main.py --mode evaluate_curriculum --model_type biological_ncap --resume_
 
 ## 🔬 Key Research Discoveries
 
+### **🚨 Reward System Architecture - Critical Learning Challenge**
+Our latest training revealed that **incentive structure, not just environment complexity, was the primary learning bottleneck**:
+
+#### **The Reward Hacking Problem**
+- **Timeout Exploitation**: Agents learned to avoid targets and collect guaranteed timeout rewards instead of navigating
+- **Distance Stagnation**: 0.4-0.5m performance indicated complete avoidance of locomotion training
+- **Target Radius Exploitation**: 1.5m radius + 40s timeouts made "doing nothing" more rewarding than learning
+- **Action Limiting**: 30% action clamping prevented fast swimming, encouraging passive behavior
+
+#### **The Navigation vs Survival Dilemma**
+The original reward system inadvertently taught agents that **survival (avoiding failure) was more profitable than achievement (reaching targets)**:
+
+```
+Original System:
+✗ Timeout after 40s → Small positive reward (0.5)
+✗ Large target radius (1.5m) → Easy to accidentally complete
+✗ Movement penalties → Encouraged minimal motion
+✗ Equal treatment → No incentive for challenging land targets
+
+Fixed System:
+✓ No timeout rewards → Must reach targets for any navigation reward
+✓ Strict target radius (0.8m) → Requires precise navigation  
+✓ Land target bonuses (1.5-2.0x) → Encourages environment diversity
+✓ Movement rewards → Active locomotion encouraged
+```
+
+#### **Biological Constraint vs Learning Trade-off**
+We discovered a fundamental tension between biological authenticity and learning capability:
+- **Too Strict**: Biological constraints prevented effective actuation and adaptation
+- **Too Loose**: Lost biological plausibility and circuit authenticity
+- **Sweet Spot**: 50% relaxation of constraints every 25k steps (vs every 5k steps) maintains biology while enabling learning
+
 ### **🚨 Environment Physics Issues Solved**
 Our comprehensive analysis revealed that **environment complexity, not model architecture, was the primary bottleneck**:
 
@@ -558,17 +622,29 @@ This validates:
 
 ## 📚 Performance Benchmarks
 
+### **Reward System Learning Journey**
+- **Original Broken System**: 0.4-0.5m (reward hacking, timeout exploitation)
+- **Fixed Incentive Structure**: Target 5-15m (proper navigation learning)
+- **Key Insight**: **Incentive design matters more than model architecture** for learning success
+
 ### **Zero-Shot NCAP Performance**
 - **Simple Environment**: 0.30m (good biological circuit function)
 - **Complex Environment**: 0.06m (physics issues, now solved)
 - **With Gear Fix**: 0.21m (physics optimization applied)
 
-### **Training Expectations**
+### **Training Expectations (Post-Reward Fix)**
 - **Untrained/Random**: 0.0-0.5m (mostly random motion)
 - **Learning Phase**: 0.5-2.0m (developing coordination)  
 - **Good Performance**: 2.0-10.0m (effective swimming)
 - **Excellent Performance**: 10.0-50.0m (optimized locomotion)
 - **Expert Level**: 50.0+m (highly efficient, stretch goal)
+
+### **Reward System Lessons Learned**
+1. **Never reward inaction** - timeout rewards taught avoidance behavior
+2. **Strict completion criteria** - loose target radius encouraged accidental success
+3. **Environment neutrality** - don't penalize challenging environments
+4. **Progress over proximity** - reward movement toward goals, not just closeness
+5. **Balanced constraints** - biological authenticity vs learning capability trade-off
 
 ## 🎯 Success Criteria
 
