@@ -879,27 +879,8 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 except ImportError:
                     pass
             
-            # Track progress monitoring
-            if self._target_visit_timer > 0 and self._target_visit_timer % 300 == 0:
-                if hasattr(self, '_initial_target_distance'):
-                    distance_traveled = max(0, self._initial_target_distance - distance_to_target)
-                    time_elapsed = self._target_visit_timer / 30.0  # Convert to seconds
-                    actual_speed = distance_traveled / time_elapsed if time_elapsed > 0 else 0
-                    
-                    try:
-                        from tqdm import tqdm
-                        current_target_info = f"Target #{self._targets_reached + 1}"
-                        progress_percent = (distance_traveled / self._initial_target_distance * 100) if self._initial_target_distance > 0 else 0
-                        target_env = "🏝️ LAND" if current_target['type'] == 'land' else "🌊 WATER"
-                        
-                        # **FIX: Add warning for very distant targets that may be unreachable**
-                        if self._initial_target_distance > 3.0 and distance_traveled < 0.5:
-                            tqdm.write(f"⚠️ Progress update {current_target_info} ({target_env}): {distance_traveled:.2f}m/{self._initial_target_distance:.2f}m ({progress_percent:.1f}%) in {time_elapsed:.1f}s = {actual_speed:.3f}m/s")
-                            tqdm.write(f"   Warning: Target is very distant ({self._initial_target_distance:.1f}m) - may require advanced training")
-                        else:
-                            tqdm.write(f"🏊 Progress update {current_target_info} ({target_env}): {distance_traveled:.2f}m/{self._initial_target_distance:.2f}m ({progress_percent:.1f}%) in {time_elapsed:.1f}s = {actual_speed:.3f}m/s")
-                    except ImportError:
-                        pass
+            # Progress monitoring silenced
+            pass
             
             # **ULTIMATE CIRCULAR SWIMMING FIX**: Reward progress, not proximity
             # Only reward actual progress toward target (not just being close)
@@ -1171,6 +1152,11 @@ class ProgressiveMixedSwimmerEnv:
         """Render the environment."""
         return self.physics.render(camera_id=0, height=height, width=width)
     
+    @property
+    def head_position(self):
+        """Get current swimmer head position."""
+        return self.physics.named.data.xpos['head'][:2].copy()
+
     def close(self):
         """Close the environment."""
         pass
@@ -1335,6 +1321,11 @@ class TonicProgressiveMixedWrapper(gym.Env):
         progress = self.env.training_progress
         phase = int(progress * 4)
         return f"progressive-mixed-swimmer-{self.env.n_links}links-phase{phase}"
+
+    @property
+    def head_position(self):
+        """Get head position from underlying environment."""
+        return self.env.head_position
 
     @property 
     def training_progress(self):

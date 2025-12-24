@@ -9,6 +9,8 @@ import json
 import time
 from datetime import datetime
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Force non-interactive backend
 import matplotlib.pyplot as plt
 import pandas as pd
 from collections import defaultdict

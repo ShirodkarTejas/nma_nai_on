@@ -5,6 +5,8 @@ Specialized plotting and video generation for progressive training.
 """
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Force non-interactive backend
 import matplotlib.pyplot as plt
 import imageio
 import os

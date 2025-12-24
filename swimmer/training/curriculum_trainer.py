@@ -22,12 +22,8 @@ from ..utils.training_logger import TrainingLogger
 from ..utils.curriculum_visualization import create_curriculum_plots, create_test_video, create_phase_comparison_video, save_training_summary, create_trajectory_analysis
 from ..utils.artifact_naming import ArtifactNamer, detect_model_type
 
-try:
-    from ..utils.advanced_logger import AdvancedTrainingLogger
-    ADVANCED_LOGGING_AVAILABLE = True
-except ImportError:
-    ADVANCED_LOGGING_AVAILABLE = False
-    print("⚠️ Advanced logging not available (missing psutil). Using basic logging.")
+# Force basic logging to avoid background monitoring overhead
+ADVANCED_LOGGING_AVAILABLE = False
 
 
 class CurriculumNCAPTrainer:
@@ -60,8 +56,10 @@ class CurriculumNCAPTrainer:
                  min_coupling_strength=0.5,  # **REDUCED** from 0.8 to 0.5 for speed flexibility  
                  biological_constraint_frequency=25000,  # **REDUCED** frequency: every 25k steps
                  resume_from_checkpoint=None,  # Path to checkpoint to resume from
-                 model_type='enhanced_ncap',  # Model type: biological_ncap, enhanced_ncap
+                  model_type='enhanced_ncap',  # Model type: biological_ncap, enhanced_ncap
                  algorithm='ppo',  # Algorithm for naming
+                 num_workers=8,    # NEW: Number of parallel environments
+                 use_multi_gpu=True, # NEW: Use all available GPUs
                  use_locomotion_only_early_training=True):  # **NEW**: Use pure locomotion for first 30% of training
         
         self.n_links = n_links
@@ -70,6 +68,8 @@ class CurriculumNCAPTrainer:
         self.save_steps = save_steps
         self.log_episodes = log_episodes
         self.device = device
+        self.num_workers = num_workers
+        self.use_multi_gpu = use_multi_gpu
         self.oscillator_period = oscillator_period
         self.min_oscillator_strength = min_oscillator_strength
         self.min_coupling_strength = min_coupling_strength
@@ -132,13 +132,14 @@ class CurriculumNCAPTrainer:
             time_feature=True,
             desired_speed=0.15
         )
-        
-        print(f"🌊 Created progressive mixed environment")
-        print(f"   Environment: {env.name}")
-        print(f"   Observation space: {env.observation_space.shape}")
-        print(f"   Action space: {env.action_space.shape}")
-        
         return env
+    
+    def create_vectorized_environment(self):
+        """Create multiple environments running in parallel."""
+        from ..environments.vectorized_env import SubprocVecEnv
+        print(f"🌊 Creating {self.num_workers} parallel environments...")
+        env_fns = [lambda: self.create_environment() for _ in range(self.num_workers)]
+        return SubprocVecEnv(env_fns)
     
     def create_model(self):
         """Create NCAP model optimized for curriculum learning based on model_type."""
@@ -187,64 +188,87 @@ class CurriculumNCAPTrainer:
             raise ValueError(f"Unsupported model type: {self.model_type}. "
                            f"Supported: 'biological_ncap', 'enhanced_ncap'")
         
+        # Enable Multi-GPU if requested and available
+        if self.use_multi_gpu and torch.cuda.device_count() > 1:
+            print(f"⚡ Using {torch.cuda.device_count()} GPUs with DataParallel")
+            model = torch.nn.DataParallel(model)
+        
         return model
     
     def create_agent(self, model, env):
         """Create simplified agent for curriculum training."""
+        trainer_lr = self.learning_rate
         
         # Create biological NCAP agent wrapper with environment adaptation
         class BiologicalNCAPAgent:
-            def __init__(self, ncap_model, environment):
+            def __init__(self, ncap_model, environment, n_links):
                 self.ncap_model = ncap_model
-                self.step_count = 0
-                self.use_stable_init = False  # **FIXED**: Allow full action range for speed development
+                self.n_links = n_links
+                self.n_joints = n_links - 1
+                self.step_count = 0  # Global step count for evaluation
+                self.use_stable_init = False
                 
                 # Initialize RL training components
-                # Get learning rate from parent trainer
-                learning_rate = 3e-5  # Default learning rate for NCAP training
-                self.optimizer = torch.optim.Adam(ncap_model.parameters(), lr=learning_rate)
-                self.episode_buffer = {'obs': [], 'actions': [], 'rewards': []}
+                self.optimizer = torch.optim.Adam(ncap_model.parameters(), lr=trainer_lr)
+                self.num_workers = len(environment.remotes) if hasattr(environment, 'remotes') else 1
+                self.episode_buffers = [{'obs': [], 'actions': [], 'rewards': [], 'timesteps': []} for _ in range(self.num_workers)]
                 self.training_enabled = True
+                self.step_counts = np.zeros(self.num_workers, dtype=int)
+                
+                # Precompute offsets for observation processing
+                self.body_vel_size = self.n_links * 3 + 3
+                self.env_features_start = self.n_joints + self.body_vel_size
+                self.goal_features_start = self.env_features_start + 5
                 
             def step(self, obs):
-                """Training step - returns action AND updates model."""
-                action = self.test_step(obs)
+                """Batch training step - returns actions for all workers."""
+                # obs shape: (num_workers, obs_dim)
+                actions = self.test_step(obs)
                 
-                # Store experience for training (if training enabled)
-                if self.training_enabled and len(self.episode_buffer['obs']) > 0:
-                    # Store previous transition
-                    self.episode_buffer['obs'].append(obs)
-                    self.episode_buffer['actions'].append(action)
-                
-                return action
-            
-            def add_reward(self, reward):
-                """Add reward for the last action."""
+                # Store experience for each worker
                 if self.training_enabled:
-                    self.episode_buffer['rewards'].append(reward)
-            
-            def end_episode(self):
-                """End episode and train on collected experience."""
-                if not self.training_enabled or len(self.episode_buffer['rewards']) < 5:
-                    self._reset_buffer()
-                    return
+                    for i in range(self.num_workers):
+                        self.episode_buffers[i]['obs'].append(obs[i])
+                        self.episode_buffers[i]['actions'].append(actions[i])
+                        self.episode_buffers[i]['timesteps'].append(self.step_counts[i])
                 
-                # Simple policy gradient training
-                self._train_on_episode()
-                self._reset_buffer()
+                # step_counts increment moved inside test_step for parallelism consistency
+                return actions
             
-            def _train_on_episode(self):
-                """Train model on episode buffer using policy gradient."""
-                if len(self.episode_buffer['rewards']) == 0:
+            def add_rewards(self, rewards):
+                """Add rewards for all workers."""
+                if self.training_enabled:
+                    for i, reward in enumerate(rewards):
+                        self.episode_buffers[i]['rewards'].append(reward)
+            
+            def end_episodes(self, indices=None):
+                """End episodes for specified workers and train."""
+                if not self.training_enabled:
+                    return
+                    
+                if indices is None:
+                    indices = range(self.num_workers)
+                
+                for i in indices:
+                    if len(self.episode_buffers[i]['rewards']) >= 5:
+                        self._train_on_episode(i)
+                    self._reset_buffer(i)
+            
+            def _train_on_episode(self, worker_idx):
+                """Train model on specific worker's episode buffer."""
+                buffer = self.episode_buffers[worker_idx]
+                if len(buffer['rewards']) == 0:
                     return
                 
                 try:
-                    device = next(self.ncap_model.parameters()).device
+                    # Access the actual model if wrapped in DataParallel
+                    actual_model = self.ncap_model.module if isinstance(self.ncap_model, torch.nn.DataParallel) else self.ncap_model
+                    device = next(actual_model.parameters()).device
                     
-                    # Calculate returns (discounted rewards)
+                    # Calculate returns
                     returns = []
                     running_return = 0
-                    for reward in reversed(self.episode_buffer['rewards']):
+                    for reward in reversed(buffer['rewards']):
                         running_return = reward + 0.99 * running_return
                         returns.insert(0, running_return)
                     
@@ -256,43 +280,61 @@ class CurriculumNCAPTrainer:
                     if returns.std() > 1e-6:
                         returns = (returns - returns.mean()) / (returns.std() + 1e-8)
                     
-                    # Convert observations and actions to tensors
+                    # Convert observations, actions, and timesteps to tensors
                     obs_batch = []
                     action_batch = []
+                    timestep_batch = []
                     
-                    for i in range(min(len(self.episode_buffer['obs']), len(self.episode_buffer['actions']))):
-                        obs_batch.append(self.episode_buffer['obs'][i])
-                        action_batch.append(self.episode_buffer['actions'][i])
+                    for i in range(min(len(buffer['obs']), len(buffer['actions']), len(buffer['timesteps']))):
+                        obs_batch.append(buffer['obs'][i])
+                        action_batch.append(buffer['actions'][i])
+                        timestep_batch.append(buffer['timesteps'][i])
                     
                     if len(obs_batch) == 0:
                         return
                     
                     # Train on mini-batches
-                    batch_size = min(32, len(obs_batch))
+                    batch_size = min(64, len(obs_batch)) # Increased batch size for multi-GPU
                     for start_idx in range(0, len(obs_batch), batch_size):
                         end_idx = min(start_idx + batch_size, len(obs_batch))
                         
-                        batch_obs = obs_batch[start_idx:end_idx]
-                        batch_actions = action_batch[start_idx:end_idx]
+                        batch_obs = np.array(obs_batch[start_idx:end_idx])
+                        batch_actions = torch.FloatTensor(np.array(action_batch[start_idx:end_idx])).to(device)
+                        batch_timesteps = torch.FloatTensor(np.array(timestep_batch[start_idx:end_idx])).to(device)
                         batch_returns = returns[start_idx:end_idx]
                         
-                        if len(batch_obs) < 2:
-                            continue
+                        # Batched forward pass (Uses DataParallel if wrapped)
+                        # Extract components for whole batch
+                        joint_pos = torch.FloatTensor(batch_obs[:, :self.n_joints]).to(device)
                         
-                        # Get model predictions
-                        predicted_actions = []
-                        for obs in batch_obs:
-                            action = self._get_model_action(obs)
-                            predicted_actions.append(action)
+                        environment_type = None
+                        if batch_obs.shape[1] >= self.env_features_start + 3:
+                            water_flag = torch.FloatTensor(batch_obs[:, self.env_features_start + 1:self.env_features_start + 2]).to(device)
+                            land_flag = torch.FloatTensor(batch_obs[:, self.env_features_start + 2:self.env_features_start + 3]).to(device)
+                            vis_norm = torch.FloatTensor(batch_obs[:, self.env_features_start:self.env_features_start + 1]).to(device)
+                            environment_type = torch.cat([water_flag, land_flag, vis_norm], dim=1)
                         
-                        if len(predicted_actions) == 0:
-                            continue
+                        target_direction = None
+                        if batch_obs.shape[1] >= self.goal_features_start + 3:
+                            target_direction = torch.FloatTensor(batch_obs[:, self.goal_features_start + 1:self.goal_features_start + 3]).to(device)
                         
-                        predicted_actions = torch.stack(predicted_actions)
-                        actual_actions = torch.FloatTensor(batch_actions).to(device)
+                        # Get model predictions for the whole mini-batch at once
+                        if hasattr(actual_model, 'include_goal_direction') and actual_model.include_goal_direction:
+                            predicted_actions = self.ncap_model(
+                                joint_pos, 
+                                environment_type=environment_type,
+                                target_direction=target_direction,
+                                timesteps=batch_timesteps
+                            )
+                        else:
+                            predicted_actions = self.ncap_model(
+                                joint_pos, 
+                                environment_type=environment_type,
+                                timesteps=batch_timesteps
+                            )
                         
                         # Policy gradient loss
-                        loss = torch.nn.functional.mse_loss(predicted_actions, actual_actions, reduction='none')
+                        loss = torch.nn.functional.mse_loss(predicted_actions, batch_actions, reduction='none')
                         policy_loss = (loss.mean(dim=1) * batch_returns[:len(loss)]).mean()
                         
                         # Update model
@@ -302,54 +344,64 @@ class CurriculumNCAPTrainer:
                         self.optimizer.step()
                         
                 except Exception as e:
+                    import traceback
+                    traceback.print_exc()
                     print(f"⚠️ Training step failed: {e}")
             
-            def _reset_buffer(self):
-                """Reset episode buffer."""
-                self.episode_buffer = {'obs': [], 'actions': [], 'rewards': []}
+            def _reset_buffer(self, worker_idx):
+                """Reset specific worker's episode buffer."""
+                self.episode_buffers[worker_idx] = {'obs': [], 'actions': [], 'rewards': [], 'timesteps': []}
+                self.step_counts[worker_idx] = 0
             
             def _get_model_action(self, obs):
-                """Get action from NCAP model as tensor for training."""
-                device = next(self.ncap_model.parameters()).device
+                """Get action from NCAP model for a single observation (e.g. during evaluation)."""
+                # CRITICAL: Always use the underlying module for single samples to avoid DataParallel scattering errors
+                actual_model = self.ncap_model.module if isinstance(self.ncap_model, torch.nn.DataParallel) else self.ncap_model
+                device = next(actual_model.parameters()).device
                 
                 if not isinstance(obs, torch.Tensor):
                     obs = torch.tensor(obs, dtype=torch.float32, device=device)
                 elif obs.device != device:
                     obs = obs.to(device)
                 
-                # Extract joint positions and other inputs (same logic as test_step)
-                joint_pos = obs[:4] if len(obs) >= 4 else torch.zeros(4, device=device)
+                # Single observation handling
+                if obs.dim() == 0:
+                    return torch.zeros(self.n_joints, device=device)
                 
-                # Environment adaptation
+                # Use dynamic offsets
+                joint_pos = obs[:self.n_joints]
+                
+                # Environment adaptation [water, land, viscosity_norm]
                 environment_type = None
-                if len(obs) >= 9:
-                    water_flag = obs[8:9]
-                    land_flag = 1.0 - water_flag
-                    viscosity_norm = torch.zeros_like(water_flag) + 0.1
-                    environment_type = torch.cat([water_flag, land_flag, viscosity_norm])
+                if len(obs) >= self.env_features_start + 3:
+                    water_flag = obs[self.env_features_start + 1]
+                    land_flag = obs[self.env_features_start + 2]
+                    vis_norm = obs[self.env_features_start]
+                    environment_type = torch.tensor([water_flag, land_flag, vis_norm], dtype=torch.float32, device=device)
                 
-                # Goal direction (for enhanced NCAP)
+                # Goal direction
                 target_direction = None
-                if len(obs) >= 32 and hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
-                    target_x, target_y = obs[-4:-3], obs[-3:-2]
-                    swimmer_x, swimmer_y = obs[-2:-1], obs[-1:]
-                    target_direction = torch.cat([target_x - swimmer_x, target_y - swimmer_y])
+                if len(obs) >= self.goal_features_start + 3 and hasattr(actual_model, 'include_goal_direction') and actual_model.include_goal_direction:
+                    target_direction = obs[self.goal_features_start + 1:self.goal_features_start + 3]
                 
-                # Get action from model
+                # Get action from the ALREADY UNWRAPPED model
                 with torch.no_grad():
-                    if hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
-                        action = self.ncap_model(
+                    # We MUST increment evaluation step count separately
+                    t = torch.tensor([self.step_count], dtype=torch.float32, device=device)
+                    if hasattr(actual_model, 'include_goal_direction') and actual_model.include_goal_direction:
+                        action = actual_model(
                             joint_pos, 
                             environment_type=environment_type,
                             target_direction=target_direction,
-                            timesteps=torch.tensor([self.step_count], device=device)
+                            timesteps=t
                         )
                     else:
-                        action = self.ncap_model(
+                        action = actual_model(
                             joint_pos, 
                             environment_type=environment_type,
-                            timesteps=torch.tensor([self.step_count], device=device)
+                            timesteps=t
                         )
+                    self.step_count += 1 # Increment for next call
                 
                 return action
             
@@ -358,61 +410,58 @@ class CurriculumNCAPTrainer:
                 # Get device from model parameters
                 device = next(self.ncap_model.parameters()).device
                 
-                # Extract joint positions, environment info, and target info from observation
-                if isinstance(obs, dict):
-                    joint_pos = torch.tensor(obs['joints'], dtype=torch.float32, device=device)
-                    
-                    # Extract environment information for biological adaptation
-                    environment_type = None
-                    if 'environment_type' in obs and 'fluid_viscosity' in obs:
-                        env_flags = obs['environment_type']  # [water_flag, land_flag]
-                        viscosity = obs['fluid_viscosity'][0] if hasattr(obs['fluid_viscosity'], '__len__') else obs['fluid_viscosity']
-                        # Normalize viscosity for biological model
-                        vis_norm = np.clip((np.log10(viscosity) - np.log10(1e-4)) / (np.log10(1.5) - np.log10(1e-4)), 0.0, 1.0)
-                        environment_type = np.array([env_flags[0], env_flags[1], vis_norm], dtype=np.float32)
-                    
-                    # **NEW**: Extract target information for goal-directed navigation
-                    target_direction = None
-                    if hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
-                        if 'target_direction' in obs:
-                            target_direction = obs['target_direction']
-                        elif 'target_position' in obs:
-                            # Use target position as direction (simplified)
-                            target_pos = obs['target_position']
-                            target_norm = np.linalg.norm(target_pos)
-                            if target_norm > 0.1:  # Valid target
-                                target_direction = target_pos / target_norm
-                else:
-                    joint_pos = torch.tensor(obs[:4], dtype=torch.float32, device=device)
-                    environment_type = None
-                    target_direction = None
-                
-                # Get NCAP action with biological adaptation and goal-directed navigation
+                # NCAP processing
                 with torch.no_grad():
-                    if hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
-                        # Enhanced NCAP with goal-directed navigation
-                        action = self.ncap_model(
-                            joint_pos, 
-                            environment_type=environment_type,
-                            target_direction=target_direction,
-                            timesteps=torch.tensor([self.step_count], device=device)
-                        )
+                    # Handle batch observations from SubprocVecEnv
+                    if obs.ndim == 2:
+                        batch_size = obs.shape[0]
+                        joint_pos = torch.tensor(obs[:, :self.n_joints], dtype=torch.float32, device=device)
+                        
+                        environment_type = None
+                        target_direction = None
+                        
+                        # Use precomputed offsets for batch extraction
+                        if obs.shape[1] >= self.env_features_start + 3:
+                            # viscosity = obs[:, start], water = obs[:, start+1], land = obs[:, start+2]
+                            vis_norm = torch.tensor(obs[:, self.env_features_start:self.env_features_start+1], dtype=torch.float32, device=device)
+                            water_flag = torch.tensor(obs[:, self.env_features_start+1:self.env_features_start+2], dtype=torch.float32, device=device)
+                            land_flag = torch.tensor(obs[:, self.env_features_start+2:self.env_features_start+3], dtype=torch.float32, device=device)
+                            environment_type = torch.cat([water_flag, land_flag, vis_norm], dim=1)
+                        
+                        if obs.shape[1] >= self.goal_features_start + 3:
+                            # target_direction is at goal_features_start + 1, + 2
+                            target_direction = torch.tensor(obs[:, self.goal_features_start+1:self.goal_features_start+3], dtype=torch.float32, device=device)
+                        
+                        timesteps = torch.tensor(self.step_counts, dtype=torch.float32, device=device)
+                        
+                        # Forward pass - self.ncap_model might be DataParallel
+                        if hasattr(self.ncap_model, 'module') and hasattr(self.ncap_model.module, 'include_goal_direction') and self.ncap_model.module.include_goal_direction:
+                            action = self.ncap_model(
+                                joint_pos, 
+                                environment_type=environment_type,
+                                target_direction=target_direction,
+                                timesteps=timesteps
+                            )
+                        elif not hasattr(self.ncap_model, 'module') and hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
+                            action = self.ncap_model(
+                                joint_pos, 
+                                environment_type=environment_type,
+                                target_direction=target_direction,
+                                timesteps=timesteps
+                            )
+                        else:
+                            action = self.ncap_model(
+                                joint_pos, 
+                                environment_type=environment_type,
+                                timesteps=timesteps
+                            )
+                        self.step_counts += 1
+                        return action.cpu().numpy()
                     else:
-                        # Standard biological NCAP
-                        action = self.ncap_model(
-                            joint_pos, 
-                            environment_type=environment_type,
-                            timesteps=torch.tensor([self.step_count], device=device)
-                        )
-                    self.step_count += 1
-                    
-                    # For untrained models, reduce action magnitude to prevent erratic motion
-                    if self.use_stable_init:
-                        action = torch.clamp(action, -0.3, 0.3)  # Reduced from default range
-                
-                return action.cpu().numpy()
+                        # Single observation (fallback to _get_model_action which handles unwrap)
+                        return self._get_model_action(obs).cpu().numpy()
         
-        agent = BiologicalNCAPAgent(model, env)
+        agent = BiologicalNCAPAgent(model, env, self.n_links)
         
         print(f"🧬 Created biological NCAP agent with environment adaptation for curriculum learning")
         
@@ -557,7 +606,7 @@ class CurriculumNCAPTrainer:
         else:
             return 3  # Full complexity
     
-    def evaluate_performance(self, agent, env, num_episodes=5, progress_bar=None):
+    def evaluate_performance(self, agent, env_ignored, num_episodes=5, progress_bar=None):
         """Evaluate current performance across different phases."""
         evaluation_results = {}
         
@@ -577,22 +626,24 @@ class CurriculumNCAPTrainer:
             
             for episode in range(num_episodes):
                 # Set environment to specific phase
-                env.env.training_progress = temp_progress
-                env.env._create_environment()
+                from ..environments.progressive_mixed_env import TonicProgressiveMixedWrapper
+                eval_env = TonicProgressiveMixedWrapper(n_links=self.n_links)
+                eval_env.env.training_progress = temp_progress
+                eval_env.env._create_environment()
                 
-                obs = env.reset()
+                obs = eval_env.reset()
                 episode_reward = 0
-                initial_pos = env.env.physics.named.data.xpos['head'][:2].copy()
+                initial_pos = eval_env.head_position
                 
                 for _ in range(steps_per_episode):  # Data-driven steps per episode
                     action = agent.test_step(obs)
-                    obs, reward, done, _ = env.step(action)
+                    obs, reward, done, _ = eval_env.step(action)
                     episode_reward += reward
                     
                     if done:
                         break
                 
-                final_pos = env.env.physics.named.data.xpos['head'][:2].copy()
+                final_pos = eval_env.head_position
                 distance = np.linalg.norm(final_pos - initial_pos)
                 
                 distances.append(distance)
@@ -603,6 +654,7 @@ class CurriculumNCAPTrainer:
                     phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
                     progress_bar.set_description(f"🔬 Evaluating {phase_names[phase]} ({episode+1}/{num_episodes})")
                     progress_bar.update(1)
+                eval_env.close()
             
             evaluation_results[phase] = {
                 'mean_distance': np.mean(distances),
@@ -619,14 +671,14 @@ class CurriculumNCAPTrainer:
         print(f"   Target: {self.training_steps:,} steps")
         print(f"   Biological constraints every {self.biological_constraint_frequency:,} steps")
         
-        # Create environment and model based on model_type
-        env = self.create_environment()
+        # Create vectorized environment
+        env = self.create_vectorized_environment()
         model = self.create_model()
         agent, tonic_model = self.create_agent(model, env)
         
         # Load checkpoint if resuming
         if self.resume_from_checkpoint:
-            self.load_checkpoint(tonic_model, self.resume_from_checkpoint)
+            self.load_checkpoint(model, self.resume_from_checkpoint)
         
         # Training loop with advanced monitoring
         start_time = time.time()
@@ -651,83 +703,85 @@ class CurriculumNCAPTrainer:
         # Phase progress tracking
         phase_names = ["🏊 Pure Swimming", "🏝️ Single Land Zone", "🏝️🏝️ Two Land Zones", "🌍 Full Complexity"]
         
+        # Reset vectorized environment
+        obs = env.reset()
+        episode_rewards = np.zeros(self.num_workers)
+        episode_distances = np.zeros(self.num_workers)
+        initial_positions = np.array(env.get_attr('head_position')).copy()
+        
         while self.current_step < self.training_steps:
             # Get current training progress
             progress = self.current_step / self.training_steps
             current_phase = self.get_current_phase(progress)
             
+            # Update environment progress across all workers (Reduced frequency to optimize speed)
+            if self.current_step % (self.num_workers * 100) < self.num_workers:
+                env.set_attr('env.training_progress', progress)
+            
             # Check for phase transitions
             if current_phase != last_phase:
-                # Update progress bar description with new phase
                 main_pbar.set_description(f"🎓 Curriculum Training - {phase_names[current_phase]}")
-                
                 tqdm.write(f"\n🎓 PHASE TRANSITION: {last_phase} → {current_phase}")
-                tqdm.write(f"   Progress: {progress:.2%}")
-                tqdm.write(f"   Step: {self.current_step:,}/{self.training_steps:,}")
-                
-                # Evaluate performance at phase transition
-                if last_phase >= 0:  # Skip initial evaluation
-                    eval_results = self.evaluate_performance(agent, env)
-                    tqdm.write(f"   Phase {last_phase} final performance:")
-                    for phase, results in eval_results.items():
-                        if phase <= last_phase:
-                            tqdm.write(f"     Phase {phase}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
-                
                 last_phase = current_phase
             
             # Apply biological constraints periodically
-            if self.current_step % self.biological_constraint_frequency == 0:
-                self.apply_biological_constraints(model)
+            if self.current_step % self.biological_constraint_frequency < self.num_workers:
+                actual_model = model.module if isinstance(model, torch.nn.DataParallel) else model
+                self.apply_biological_constraints(actual_model)
             
-            # Training step
-            obs = env.reset()
-            episode_reward = 0
-            episode_steps = 0
-            initial_pos = env.env.physics.named.data.xpos['head'][:2].copy()
+            # Step all environments in parallel
+            actions = agent.step(obs)
+            next_obs, rewards, dones, infos = env.step(actions)
+            agent.add_rewards(rewards)
             
-            # Run episode
-            episode_start_step = self.current_step
-            for _ in range(1000):  # Max episode length
-                action = agent.step(obs)
-                obs, reward, done, _ = env.step(action)
+            episode_rewards += rewards
+            self.current_step += self.num_workers
+            
+            # Update progress bar periodically to reduce overhead
+            if self.current_step % (self.num_workers * 10) < self.num_workers:
+                main_pbar.update(self.num_workers * 10)
+            
+            # Handle episode completions
+            if np.any(dones):
+                done_indices = np.where(dones)[0]
                 
-                # CRITICAL: Add reward to agent for training (was missing!)
-                agent.add_reward(reward)
+                # Calculate distances for completed episodes
+                current_head_positions = np.array(env.get_attr('head_position')).copy()
                 
-                episode_reward += reward
-                episode_steps += 1
-                self.current_step += 1
+                for idx in done_indices:
+                    episode_distance = np.linalg.norm(current_head_positions[idx] - initial_positions[idx])
+                    
+                    self.current_episode += 1
+                    self.phase_rewards[current_phase].append(episode_rewards[idx])
+                    self.phase_distances[current_phase].append(episode_distance)
+                    
+                    # Log to file periodically
+                    if self.current_episode % self.log_episodes == 0:
+                        self.logger.log_training_step({
+                            'step': self.current_step,
+                            'episode': self.current_episode,
+                            'phase': current_phase,
+                            'reward': episode_rewards[idx],
+                            'distance': episode_distance,
+                        })
+                    
+                    # Reset worker state
+                    episode_rewards[idx] = 0
+                    episode_distances[idx] = 0
+                    initial_positions[idx] = current_head_positions[idx]
                 
-                if done or self.current_step >= self.training_steps:
-                    break
+                # Train on completed episodes
+                agent.end_episodes(done_indices)
             
-            # CRITICAL: Train on episode experience (was missing!)
-            agent.end_episode()
+            obs = next_obs
             
-            # Update progress bar for steps taken this episode
-            steps_this_episode = self.current_step - episode_start_step
-            main_pbar.update(steps_this_episode)
-            
-            # Calculate episode distance
-            final_pos = env.env.physics.named.data.xpos['head'][:2].copy()
-            episode_distance = np.linalg.norm(final_pos - initial_pos)
-            
-            # Log episode results
-            self.current_episode += 1
-            self.phase_rewards[current_phase].append(episode_reward)
-            self.phase_distances[current_phase].append(episode_distance)
-            
-            # Periodic logging with ETA
-            if self.current_episode % self.log_episodes == 0:
+            # Periodic logging
+            if self.current_episode % self.log_episodes == 0 and np.any(dones):
                 elapsed_time = time.time() - start_time
                 steps_per_sec = self.current_step / elapsed_time if elapsed_time > 0 else 0
                 
-                recent_rewards = self.phase_rewards[current_phase][-10:] if self.phase_rewards[current_phase] else [0]
-                recent_distances = self.phase_distances[current_phase][-10:] if self.phase_distances[current_phase] else [0]
-                
-                # Update progress bar postfix with current stats
-                recent_reward = np.mean(recent_rewards)
-                recent_distance = np.mean(recent_distances)
+                recent_reward = np.mean(self.phase_rewards[current_phase][-10:]) if self.phase_rewards[current_phase] else 0
+                recent_distance = np.mean(self.phase_distances[current_phase][-10:]) if self.phase_distances[current_phase] else 0
                 
                 main_pbar.set_postfix({
                     'Phase': current_phase,
@@ -758,10 +812,10 @@ class CurriculumNCAPTrainer:
                     'episode': self.current_episode,
                     'phase': current_phase,
                     'progress': progress,
-                    'reward': episode_reward,
-                    'distance': episode_distance,
-                    'mean_reward_10': np.mean(recent_rewards),
-                    'mean_distance_10': np.mean(recent_distances),
+                    'reward': recent_reward,
+                    'distance': recent_distance,
+                    'mean_reward_10': recent_reward,   # recent_reward is already a mean of 10
+                    'mean_distance_10': recent_distance,
                 })
             
             # Periodic saves and evaluation
@@ -814,9 +868,12 @@ class CurriculumNCAPTrainer:
                     base_dir="outputs/curriculum_training/plots"
                 )
                 
+                # Need a single environment for visualizations
+                eval_env = self.create_environment()
+                
                 trajectory_stats = create_trajectory_analysis(
                     agent=agent,
-                    env=env,
+                    env=eval_env,
                     save_path=trajectory_path,
                     num_steps=500,
                     phase_name=f"Step {self.current_step} - {phase_names[current_phase]}",
@@ -834,11 +891,12 @@ class CurriculumNCAPTrainer:
                 )
                 create_test_video(
                     agent=agent,
-                    env=env,
+                    env=eval_env,
                     save_path=video_path,
                     num_steps=300,
                     episode_name=f"Curriculum Step {self.current_step}"
                 )
+                eval_env.close()
         
         # Close progress bar
         main_pbar.close()
@@ -947,7 +1005,10 @@ class CurriculumNCAPTrainer:
                 # Set environment to specific phase using manual override
                 temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
                 force_land_for_evaluation = phase >= 1  # Force land starts for phases 2, 3, 4
-                env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
+                
+                # Create a temporary single environment for analysis
+                eval_env = self.create_environment()
+                eval_env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 trajectory_path = self.artifact_namer.analysis_plot_name(
                     "final_trajectory", 
@@ -956,7 +1017,7 @@ class CurriculumNCAPTrainer:
                 )
                 stats = create_trajectory_analysis(
                     agent=agent,
-                    env=env,
+                    env=eval_env,
                     save_path=trajectory_path,
                     num_steps=1000,  # Longer analysis for final evaluation
                     phase_name=f"Final - {phase_names[phase]}",
@@ -973,13 +1034,15 @@ class CurriculumNCAPTrainer:
                 evaluation_type="phase_comparison_final",
                 base_dir="outputs/curriculum_training/videos"
             )
+            eval_env = self.create_environment()
             create_phase_comparison_video(
                 agent=agent,
-                env=env,
+                env=eval_env,
                 save_path=final_video_path,
                 phases_to_test=[0, 1, 2, 3],
                 phase_video_steps=self.PHASE_DURATION_CONFIG['video_steps']
             )
+            eval_env.close()
             pbar.update(1)
             tqdm.write(f"✅ Phase comparison video: {final_video_path}")
             
@@ -1098,7 +1161,10 @@ class CurriculumNCAPTrainer:
                 # Set environment to specific phase
                 temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
                 force_land_for_evaluation = phase >= 1  # Force land starts for phases 2, 3, 4
-                env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
+                
+                # Create temporary environment for analysis
+                eval_env = self.create_environment()
+                eval_env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 eval_trajectory_path = self.artifact_namer.analysis_plot_name(
                     "evaluation_trajectory", 
@@ -1107,7 +1173,7 @@ class CurriculumNCAPTrainer:
                 )
                 trajectory_stats = create_trajectory_analysis(
                     agent=agent,
-                    env=env,
+                    env=eval_env,
                     save_path=eval_trajectory_path,
                     num_steps=video_steps,
                     phase_name=f"Evaluation - {phase_names[phase]}",
@@ -1115,6 +1181,7 @@ class CurriculumNCAPTrainer:
                 )
                 
                 final_trajectory_stats[phase] = trajectory_stats
+                eval_env.close()
                 vis_pbar.update(1)
                 print(f"   ✅ {phase_names[phase]}: {trajectory_stats['final_distance']:.3f}m, {trajectory_stats['transitions']} transitions")
             
@@ -1124,13 +1191,15 @@ class CurriculumNCAPTrainer:
                 evaluation_type="phase_comparison",
                 base_dir="outputs/curriculum_training/videos"
             )
+            eval_env = self.create_environment()
             create_phase_comparison_video(
                 agent=agent,
-                env=env,
+                env=eval_env,
                 save_path=eval_comparison_video_path,
                 phases_to_test=[0, 1, 2, 3],
                 phase_video_steps=self.PHASE_DURATION_CONFIG['video_steps']
             )
+            eval_env.close()
             vis_pbar.update(1)
             print(f"✅ Phase comparison video: {eval_comparison_video_path}")
             
@@ -1138,10 +1207,10 @@ class CurriculumNCAPTrainer:
             for phase in range(4):
                 vis_pbar.set_description(f"🎬 Creating {phase_names[phase]} video")
                 
-                # Set environment to specific phase
-                temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
-                force_land_for_evaluation = phase >= 1  # Force land starts for phases 2, 3, 4
-                env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
+                temp_progress = (phase + 0.5) * 0.25
+                force_land_for_evaluation = phase >= 1
+                eval_env = self.create_environment()
+                eval_env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 phase_video_path = self.artifact_namer.evaluation_video_name(
                     evaluation_type=f"phase{phase}_{phase_names[phase].lower().replace(' ', '_')}",
@@ -1149,11 +1218,12 @@ class CurriculumNCAPTrainer:
                 )
                 create_test_video(
                     agent=agent,
-                    env=env,
+                    env=eval_env,
                     save_path=phase_video_path,
                     num_steps=video_steps,
                     episode_name=f"Evaluation - {phase_names[phase]}"
                 )
+                eval_env.close()
                 print(f"   ✅ {phase_names[phase]} video: {phase_video_path}")
             vis_pbar.update(1)
             
