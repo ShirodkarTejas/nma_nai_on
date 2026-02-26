@@ -39,15 +39,15 @@ def build_parser():
     )
     parser.add_argument('--algorithm', choices=['ppo', 'a2c'], default='ppo', help='RL algorithm to use for training/evaluation.')
     parser.add_argument('--n_links', type=int, default=6, help='Number of links in the swimmer.')
-    parser.add_argument('--training_steps', type=int, default=100000, help='Number of training steps.')
+    parser.add_argument('--training_steps', type=int, default=1000000, help='Number of training steps.')
     parser.add_argument(
         '--log_dir',
         type=str,
         default='results/manual_run',
         help='Root directory for training logs, checkpoints, and evaluation artifacts.',
     )
-    parser.add_argument('--save_steps', type=int, default=20000, help='Checkpoint/save interval in steps.')
-    parser.add_argument('--log_episodes', type=int, default=5, help='Episode logging interval.')
+    parser.add_argument('--save_steps', type=int, default=50000, help='Checkpoint/save interval in steps.')
+    parser.add_argument('--log_episodes', type=int, default=50, help='Episode logging interval.')
     parser.add_argument('--load_model', type=str, default=None, help='Path to a trained tonic model for evaluation.')
     parser.add_argument(
         '--resume_checkpoint',
