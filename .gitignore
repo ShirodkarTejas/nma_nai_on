@@ -132,3 +132,4 @@ Thumbs.db
 *.json
 *.pkl
 *.pickle outputs/
+results/
