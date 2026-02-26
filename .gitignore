@@ -131,4 +131,4 @@ Thumbs.db
 *.csv
 *.json
 *.pkl
-*.pickle 
+*.pickle outputs/
