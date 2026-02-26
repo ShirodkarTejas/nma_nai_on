@@ -23,7 +23,7 @@ class AdvancedTrainingLogger(TrainingLogger):
     Includes hardware tracking, ETA estimation, and training health analysis.
     """
     
-    def __init__(self, log_dir='outputs/training_logs', experiment_name=None):
+    def __init__(self, log_dir='results/training_logs', experiment_name=None):
         super().__init__(log_dir, experiment_name)
         
         # Hardware and system monitoring
@@ -43,6 +43,9 @@ class AdvancedTrainingLogger(TrainingLogger):
         # ETA and progress tracking
         self.eta_history = deque(maxlen=10)
         self.progress_checkpoints = []
+
+        # Parameter-change tracking (None until first checkpoint is logged)
+        self.previous_params = None
         
         # System info logging
         self.log_system_info()
@@ -185,7 +188,7 @@ class AdvancedTrainingLogger(TrainingLogger):
                 self.training_health['gradient_norms'].append(total_norm)
         
         # Parameter change tracking
-        if model is not None and hasattr(self, 'previous_params'):
+        if model is not None and self.previous_params is not None:
             param_change = 0.0
             for (name, param), (prev_name, prev_param) in zip(model.named_parameters(), self.previous_params):
                 if name == prev_name:

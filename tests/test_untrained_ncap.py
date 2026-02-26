@@ -8,7 +8,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from swimmer.models.ncap_swimmer import NCAPSwimmer
-from swimmer.environments.mixed_environment import ImprovedMixedSwimmerEnv
+from swimmer.environments.mixed_environment import MixedSwimmerEnv
 
 
 def test_untrained_ncap():
@@ -28,7 +28,7 @@ def test_untrained_ncap():
     )
     
     # Create environment
-    env = ImprovedMixedSwimmerEnv(n_links=6)
+    env = MixedSwimmerEnv(n_links=6)
     obs = env.reset()
     
     print(f"📊 Initial NCAP parameters:")
@@ -108,8 +108,8 @@ def test_untrained_ncap():
     axes[2].grid(True)
     
     plt.tight_layout()
-    plt.savefig('outputs/untrained_ncap_analysis.png', dpi=150, bbox_inches='tight')
-    print("📊 Analysis plots saved to 'outputs/untrained_ncap_analysis.png'")
+    plt.savefig('results/untrained_ncap_analysis.png', dpi=150, bbox_inches='tight')
+    print("📊 Analysis plots saved to 'results/untrained_ncap_analysis.png'")
     
     env.close()
     return actions, joint_positions
@@ -154,8 +154,8 @@ def test_oscillator_only():
     plt.ylabel('Action Value')
     plt.grid(True)
     plt.axhline(y=0, color='r', linestyle='--', alpha=0.5)
-    plt.savefig('outputs/pure_oscillator_test.png', dpi=150, bbox_inches='tight')
-    print("📊 Oscillator plot saved to 'outputs/pure_oscillator_test.png'")
+    plt.savefig('results/pure_oscillator_test.png', dpi=150, bbox_inches='tight')
+    print("📊 Oscillator plot saved to 'results/pure_oscillator_test.png'")
     
     return actions
 

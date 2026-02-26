@@ -18,7 +18,7 @@ def test_trained_model_coupling():
     # Load trained model
     try:
         trained_model = SimpleNCAPSwimmer(n_joints=4)
-        checkpoint = torch.load('outputs/training/improved_ncap_5links.pt', map_location='cpu')
+        checkpoint = torch.load('results/training/base_ncap_5links.pt', map_location='cpu')
         
         # Extract NCAP parameters from checkpoint
         ncap_params = {}

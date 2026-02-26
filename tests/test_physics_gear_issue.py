@@ -4,7 +4,7 @@ Diagnostic test for physics gear ratio issues.
 """
 
 import numpy as np
-from swimmer.environments.mixed_environment import ImprovedMixedSwimmerEnv
+from swimmer.environments.mixed_environment import MixedSwimmerEnv
 
 
 def test_gear_ratios():
@@ -12,7 +12,7 @@ def test_gear_ratios():
     print("🔧 Testing Physics Gear Ratios...")
     
     # Create environment
-    env = ImprovedMixedSwimmerEnv(n_links=5)
+    env = MixedSwimmerEnv(n_links=5)
     physics = env.physics
     
     print(f"📊 Current Physics Parameters:")

@@ -34,6 +34,13 @@ Recent curriculum training revealed fundamental issues with the incentive struct
    - Muscle parameters: 0.8 → 0.5 (stronger actuation capability)
    - Constraint application frequency: every 5k → 25k steps (less restrictive)
 
+5. **Forward Momentum Reward Shaping** *(feats/connectomic_priors)*:
+   - Added an explicit forward-momentum bonus: velocity projected onto the agent's heading vector is rewarded at every step, directly penalising lateral drift and backward motion.
+   - Oscillation variance penalty (`--force_oscillation`) works in concert with the momentum reward to prevent the "curl-and-shiver" local optimum in viscous environments.
+   - Land-zone curriculum radius extended to 0.2 m (`shrink_steps=[0,10,20,40]`, `radii=[1.0,0.6,0.4,0.2]`) so agents must navigate tight targets rather than drifting into large reward zones.
+
+   
+
 ### **✅ All Systems Ready + Enhanced Incentive Design**
 - **🎯 Target Cycling Fixed**: All navigation targets now cycle properly (not stuck on target 1)
 - **🔄 Resume Training**: Seamless continuation from checkpoints (100k → 200k → 1M)
@@ -123,6 +130,13 @@ Our NCAP model achieves **high biological authenticity** by directly implementin
 - **Our model**: Parameter constraints enforce biological sign restrictions
 - **Plausibility**: ⭐⭐⭐⭐⭐ **Excellent** - fundamental neuroscience principle
 
+**6. Connectomic Initialization & Regularization** *(feats/connectomic_priors)*
+We integrated the **Cook 2019 sub-millimeter *C. elegans* connectome** directly into the policy:
+1. **Synaptic Weight Initialization:** Extracted precise chemical synapse counts for B-neurons to muscles, B-neurons to D-neurons, D-neurons to contralateral muscles, and DVA to B-neurons across both ventral and dorsal pathways to biologically seed the network.
+2. **Spatial Regularization:** Extracted the 3D geometric distances between the aforementioned neuron somas, utilizing this spatial data as a topological L2 regularization hyperparameter (`--sparse_reg_lambda`).
+3. **D-Neuron Series Conductance Abstraction:** For crossed inhibitory pathways, we calculate effective throughput using `N_eff = (N1 * N2) / (N1 + N2)` for DB→DD→ventral-muscle and VB→VD→dorsal-muscle chains.
+4. **Exact Gap-Junction Extraction:** Sourced from Cook 2019 gap matrices for adjacent B-neuron electrical coupling (`DB_i↔DB_{i+1}`, `VB_i↔VB_{i+1}`).
+
 #### **📊 Comparison to Real C. elegans:**
 
 | **Aspect** | **Real C. elegans** | **Our NCAP Model** | **Match** |
@@ -198,8 +212,13 @@ nma_neuroai/
 │       ├── visualization.py         # ✅ Evaluation and plotting utilities
 │       ├── training_logger.py       # ✅ Comprehensive training logging
 │       └── helpers.py               # ✅ Utility functions
+├── connectome_priors/               # ✅ [feats/connectomic_priors] Cook 2019 connectome integration
+│   ├── swimmer_priors.py            #    Cook 2019 → sparse pathway priors
+│   ├── c_elegans_connectome.py      #    Connectome edge loading
+│   └── c_elegans_geometry.py        #    c302 NML geometry parsing
 ├── tests/                           # ✅ All testing components
 ├── MODEL_LEARNINGS.md               # 🧠 Comprehensive model analysis & empirical findings
+├── run_experiments.py               # ✅ [feats/connectomic_priors] 4-step ablation runner
 ├── outputs/
 │   ├── curriculum_training/         # ✅ Complete curriculum training outputs
 │   │   ├── checkpoints/             # ✅ Training checkpoints (resume from here)
@@ -405,6 +424,75 @@ python main.py --mode train_improved --training_steps 30000 --save_steps 10000 -
 python main.py --mode evaluate --load_model outputs/curriculum_final_model_5links.pt
 ```
 
+---
+
+## 🔬 Connectomic Priors & Ablation Study *(feats/connectomic_priors)*
+
+This branch integrates Cook 2019 connectome data directly into the NCAP policy initialization and regularization, then isolates each contribution through a structured ablation study.
+
+### 🧬 Connectome-Informed Policy
+
+The `connectome_priors/` module (see `swimmer_priors.py`, `c_elegans_connectome.py`, `c_elegans_geometry.py`) extracts three types of biological signal from the Cook 2019 dataset and injects them into the optimizer loop:
+
+| Signal | Source | Effect |
+|--------|--------|--------|
+| Synaptic weight initialization | Chemical synapse counts (B-neurons, D-neurons, DVA) | Biologically seeds excitatory/inhibitory weights at network init |
+| Topological L2 regularization | 3D soma distances from c302 NML geometry | Penalizes long-range connections proportional to anatomical distance |
+| Gap-junction coupling | Cook 2019 gap matrices | Initializes adjacent B-neuron electrical coupling (`DB_i↔DB_{i+1}`, `VB_i↔VB_{i+1}`) |
+
+Connectome artifact paths are now fully configurable via CLI (no code edits required):
+
+```bash
+--xlsx_path PATH        # Path to Cook 2019 .xlsx connectome file
+--chem_sheet NAME       # Sheet name for chemical synapses (default: "hermaphrodite chemical")
+--gap_sheet NAME        # Sheet name for gap junctions (default: "hermaphrodite gap jn")
+--nml_path PATH         # Path to c302_C2_FW.net.nml geometry file
+```
+
+### 🚀 Running the Ablation Study
+
+The full 4-step ablation is launched from the repository root:
+
+```bash
+python run_experiments.py
+```
+
+This sequentially runs and archives four experiments to `results/`, each for 500,000 training steps:
+
+| Step | Name | Flags |
+|------|------|-------|
+| 01 | Baseline (canonical NCAP) | — |
+| 02 | Oscillation preservation | `--force_oscillation` |
+| 03 | Sparse initialization | `--force_oscillation --sparse_init` |
+| 04 | Full connectomic priors | `--force_oscillation --sparse_init --sparse_reg_lambda 0.05` |
+
+Results are archived to `results/<name>/` on completion.
+
+#### Manual invocation
+
+```bash
+python main.py --mode train --training_steps 500000
+python main.py --mode train --training_steps 500000 --force_oscillation
+python main.py --mode train --training_steps 500000 --force_oscillation --sparse_init
+python main.py --mode train --training_steps 500000 --force_oscillation --sparse_init --sparse_reg_lambda 0.05
+```
+
+### ⚙️ Ablation Flags
+
+| Flag | Effect |
+|------|--------|
+| `--sparse_init` | Connectome-informed weight initialization (excitatory ipsi, inhibitory contra, gap-junction next-neighbor) |
+| `--sparse_reg_lambda <λ>` | Topological L2 regularization weighted by normalized Cook-distance per pathway |
+| `--force_oscillation` | Variance penalty on actor output to prevent policy collapse to near-zero actions ("curl-and-shiver" fix) |
+| `--xlsx_path PATH` | Override default Cook 2019 XLSX path |
+| `--chem_sheet NAME` | Override chemical synapse sheet name |
+| `--gap_sheet NAME` | Override gap-junction sheet name |
+| `--nml_path PATH` | Override c302 NML geometry path |
+
+All flags are fully orthogonal and can be combined independently to isolate each contribution.
+
+---
+
 ## 🆕 Recent Improvements & Features
 
 ### 🎯 **Target Cycling Fixes**
@@ -473,6 +561,15 @@ python main.py --mode evaluate --load_model outputs/curriculum_final_model_5link
 # Evaluation options  
 --eval_episodes N            # Episodes per phase (default: 20)
 --eval_video_steps N         # Video length in steps (default: 400)
+
+# Connectomic priors options (feats/connectomic_priors)
+--sparse_init                # Connectome-informed weight initialization
+--sparse_reg_lambda <λ>      # Topological L2 regularization (e.g. 0.05)
+--force_oscillation          # Action variance penalty to prevent policy collapse
+--xlsx_path PATH             # Cook 2019 connectome XLSX path
+--chem_sheet NAME            # Chemical synapse sheet name
+--gap_sheet NAME             # Gap-junction sheet name
+--nml_path PATH              # c302 NML geometry path
 ```
 
 ### 🔧 **Phase Duration Configuration**
@@ -517,6 +614,23 @@ python main.py --mode train_curriculum --training_steps 1000000 --model_type enh
 python main.py --mode evaluate_curriculum --model_type enhanced_ncap --resume_checkpoint outputs/curriculum_training/checkpoints/enhanced_ncap/enhanced_ncap_ppo_5links_checkpoint_step_1000000.pt --eval_episodes 50 --eval_video_steps 800
 ```
 
+### **Running the Connectomic Priors Ablation** *(feats/connectomic_priors)*
+```bash
+# Full automated ablation (4 experiments × 500k steps → results/)
+python run_experiments.py
+
+# Or run individual ablation steps manually
+python main.py --mode train --training_steps 500000                                                              # Step 01: Baseline
+python main.py --mode train --training_steps 500000 --force_oscillation                                          # Step 02: + oscillation
+python main.py --mode train --training_steps 500000 --force_oscillation --sparse_init                            # Step 03: + sparse init
+python main.py --mode train --training_steps 500000 --force_oscillation --sparse_init --sparse_reg_lambda 0.05   # Step 04: Full NMAP
+
+# Use custom connectome artifact paths if needed
+python main.py --mode train --training_steps 500000 --force_oscillation --sparse_init --sparse_reg_lambda 0.05 \
+  --xlsx_path /path/to/Cook2019.xlsx \
+  --nml_path /path/to/c302_C2_FW.net.nml
+```
+
 ### **Testing Visualization Changes**
 ```bash
 # Make code changes to visualization...
@@ -548,8 +662,8 @@ python main.py --mode evaluate_curriculum --model_type biological_ncap --resume_
 - **Summaries**: `outputs/curriculum_training/summaries/biological_ncap/`
 - **Models**: `outputs/curriculum_training/models/biological_ncap/`
 
-#### **⚖️ Cross-Model Comparisons**
-- **Comparisons**: `outputs/comparisons/` (shared between model types)
+#### **🔬 Ablation Study Artifacts** *(feats/connectomic_priors)*
+- **Results**: `results/01_baseline/`, `results/02_force_oscillation/`, `results/03_sparse_init/`, `results/04_full_nmap/`
 
 ## 🔬 Key Research Discoveries
 
@@ -577,6 +691,7 @@ Fixed System:
 ✓ Strict target radius (0.8m) → Requires precise navigation  
 ✓ Land target bonuses (1.5-2.0x) → Encourages environment diversity
 ✓ Movement rewards → Active locomotion encouraged
+✓ Forward momentum bonus → Penalises lateral drift and backward motion
 ```
 
 #### **Biological Constraint vs Learning Trade-off**
@@ -660,6 +775,9 @@ This validates:
 - [x] **Biological constraints**: Automatic parameter preservation
 - [x] **Comprehensive testing**: All components verified working
 - [x] **Ready for long training**: 1M episode setup tested and confirmed
+- [x] **Connectomic priors integrated**: Cook 2019 sparse initialization and topological regularization *(feats/connectomic_priors)*
+- [x] **Ablation study structure**: 4-step experiment runner with automated archiving *(feats/connectomic_priors)*
+- [x] **Forward momentum reward**: Explicit heading-aligned velocity bonus added *(feats/connectomic_priors)*
 
 ## 📚 References
 
@@ -667,6 +785,9 @@ This validates:
 - **Original NCAP Implementation**: [ncap repository](https://github.com/nikhilxb/ncap)
 - **Tonic RL Library**: [Tonic framework](https://github.com/fabiopardo/tonic)
 - **DeepMind Control Suite**: [dm_control](https://github.com/deepmind/dm_control)
+- **Cook et al. 2019**: *C. elegans* connectome adjacency matrices (chemical synapses and gap junctions)
+- **eLife (2021)**: Phase-response evidence supporting relaxation-oscillator locomotor rhythm generation in *C. elegans*
+- **OpenWorm c302**: `c302_C2_FW.net.nml` 3D neuron geometry
 
 ## 🤝 Contributing
 
@@ -689,4 +810,4 @@ This project is for research purposes. Please respect the licenses of the underl
 
 ---
 
-*This project explores curriculum learning for biologically-inspired neural control, demonstrating how progressive complexity enables robust adaptive locomotion through neural central pattern generators.* 🧬🏊‍♂️🦎 
+*This project explores curriculum learning for biologically-inspired neural control, demonstrating how progressive complexity enables robust adaptive locomotion through neural central pattern generators.* 🧬🏊‍♂️🦎

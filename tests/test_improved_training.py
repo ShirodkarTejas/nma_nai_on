@@ -6,14 +6,14 @@ Tests the new stability-focused training approach.
 
 import sys
 import os
-from swimmer.training import ImprovedNCAPTrainer
+from swimmer.training import NCAPTrainer
 
-def test_improved_ncap_training():
+def test_base_ncap_training():
     """Test the improved NCAP training with stability measures."""
     print("=== TESTING IMPROVED NCAP TRAINING ===")
     
     # Create improved trainer with conservative settings
-    trainer = ImprovedNCAPTrainer(
+    trainer = NCAPTrainer(
         n_links=6,
         training_steps=5000,  # Start with short training for testing
         save_steps=1000,
@@ -47,10 +47,10 @@ def test_stability_measures():
     """Test the stability monitoring and parameter constraint features."""
     print("\n=== TESTING STABILITY MEASURES ===")
     
-    trainer = ImprovedNCAPTrainer(n_links=6)
+    trainer = NCAPTrainer(n_links=6)
     
     # Create a test model
-    model = trainer.create_improved_ncap_model(6)
+    model = trainer.create_base_ncap_model(6)
     tonic_model = trainer.create_tonic_ncap_model(6)
     
     # Test parameter monitoring
@@ -86,7 +86,7 @@ if __name__ == "__main__":
     
     if stability_ok:
         # Run training test
-        training_result = test_improved_ncap_training()
+        training_result = test_base_ncap_training()
         if training_result and training_result['success']:
             print("\n🎉 ALL TESTS PASSED! Improved training is working.")
         else:

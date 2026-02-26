@@ -110,8 +110,8 @@ def debug_coupling():
         axes[2].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('outputs/coupling_debug_analysis.png', dpi=150, bbox_inches='tight')
-    print("📊 Coupling analysis saved to 'outputs/coupling_debug_analysis.png'")
+    plt.savefig('results/coupling_debug_analysis.png', dpi=150, bbox_inches='tight')
+    print("📊 Coupling analysis saved to 'results/coupling_debug_analysis.png'")
 
 
 def test_manual_coupling():

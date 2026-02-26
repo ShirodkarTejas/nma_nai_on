@@ -223,7 +223,7 @@ def demonstrate_land_starting_behavior():
     
     # Create summary report
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary_path = f"outputs/land_escape_tests/simple_land_demo_summary_{timestamp}.md"
+    summary_path = f"results/land_escape_tests/simple_land_demo_summary_{timestamp}.md"
     
     # Create output directory
     os.makedirs(os.path.dirname(summary_path), exist_ok=True)
@@ -373,7 +373,7 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Simple land starting demonstration")
-    parser.add_argument("--output_dir", type=str, default="outputs/land_escape_tests", 
+    parser.add_argument("--output_dir", type=str, default="results/land_escape_tests", 
                        help="Output directory for test results")
     
     args = parser.parse_args()

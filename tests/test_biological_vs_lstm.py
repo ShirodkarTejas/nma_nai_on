@@ -203,8 +203,8 @@ def analyze_adaptation_capability():
     axes[1, 1].set_ylim(0, 5)
     
     plt.tight_layout()
-    plt.savefig('outputs/biological_vs_lstm_comparison.png', dpi=150, bbox_inches='tight')
-    print(f"\n📊 Comparison plot saved to: outputs/biological_vs_lstm_comparison.png")
+    plt.savefig('results/biological_vs_lstm_comparison.png', dpi=150, bbox_inches='tight')
+    print(f"\n📊 Comparison plot saved to: results/biological_vs_lstm_comparison.png")
     
     return bio_adaptation >= lstm_adaptation * 0.8  # True if biological is comparable
 

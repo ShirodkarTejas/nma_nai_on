@@ -7,9 +7,9 @@ Contains environment classes and wrappers.
 def _lazy_import_environments():
     """Lazy import to avoid EGL conflicts during package import."""
     from .environment_types import EnvironmentType
-    from .mixed_environment import ImprovedMixedSwimmerEnv
+    from .mixed_environment import MixedSwimmerEnv
     from .tonic_wrapper import TonicSwimmerWrapper
-    return EnvironmentType, ImprovedMixedSwimmerEnv, TonicSwimmerWrapper
+    return EnvironmentType, MixedSwimmerEnv, TonicSwimmerWrapper
 
 # Only import non-dm_control components immediately
 from .environment_types import EnvironmentType

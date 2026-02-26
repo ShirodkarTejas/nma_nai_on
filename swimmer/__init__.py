@@ -11,8 +11,8 @@ __author__ = "NeuroAI Course"
 
 def _lazy_import_environments():
     """Lazy import to avoid EGL conflicts during package import."""
-    from .environments import ImprovedMixedSwimmerEnv, EnvironmentType
-    return ImprovedMixedSwimmerEnv, EnvironmentType
+    from .environments import MixedSwimmerEnv, EnvironmentType
+    return MixedSwimmerEnv, EnvironmentType
 
 def _lazy_import_models():
     """Lazy import to avoid EGL conflicts during package import.""" 

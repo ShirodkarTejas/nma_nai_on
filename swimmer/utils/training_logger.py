@@ -9,8 +9,6 @@ import json
 import time
 from datetime import datetime
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')  # Force non-interactive backend
 import matplotlib.pyplot as plt
 import pandas as pd
 from collections import defaultdict
@@ -19,7 +17,7 @@ class TrainingLogger:
     """
     Comprehensive training logger for tracking and visualizing training progress.
     """
-    def __init__(self, log_dir='outputs/training_logs', experiment_name=None):
+    def __init__(self, log_dir='results/training_logs', experiment_name=None):
         self.log_dir = log_dir
         self.experiment_name = experiment_name or f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.log_path = os.path.join(log_dir, self.experiment_name)
@@ -149,6 +147,16 @@ class TrainingLogger:
         
         with open(self.episode_file, 'w') as f:
             json.dump(self.episode_data, f, indent=2)
+
+    def _resolve_xmax(self, x_values):
+        """Pick dynamic x-axis upper bound from data and configured training steps."""
+        if not x_values:
+            return None
+        xmax = float(max(x_values))
+        configured_steps = self.training_config.get('training_steps')
+        if isinstance(configured_steps, (int, float)) and configured_steps > 0:
+            xmax = max(xmax, float(configured_steps))
+        return xmax if xmax > 0 else None
     
     def create_training_plots(self, save_plots=True):
         """Create comprehensive training visualization plots."""
@@ -176,6 +184,9 @@ class TrainingLogger:
             ax1.set_title('Episode Rewards Over Time')
             ax1.set_xlabel('Episode')
             ax1.set_ylabel('Reward')
+            x_max = self._resolve_xmax(episodes)
+            if x_max is not None:
+                ax1.set_xlim(0, x_max)
             ax1.legend()
             ax1.grid(True, alpha=0.3)
         
@@ -195,6 +206,9 @@ class TrainingLogger:
             ax2.set_title('Episode Distances Over Time')
             ax2.set_xlabel('Episode')
             ax2.set_ylabel('Distance')
+            x_max = self._resolve_xmax(episodes)
+            if x_max is not None:
+                ax2.set_xlim(0, x_max)
             ax2.legend()
             ax2.grid(True, alpha=0.3)
         
@@ -218,6 +232,13 @@ class TrainingLogger:
             ax3.set_title('Training Losses')
             ax3.set_xlabel('Training Step')
             ax3.set_ylabel('Loss')
+            x_values = []
+            for metric_name in ('loss', 'policy_loss', 'value_loss'):
+                if metric_name in self.metrics:
+                    x_values.extend([m['step'] for m in self.metrics[metric_name]])
+            x_max = self._resolve_xmax(x_values)
+            if x_max is not None:
+                ax3.set_xlim(0, x_max)
             ax3.legend()
             ax3.grid(True, alpha=0.3)
         
@@ -238,6 +259,10 @@ class TrainingLogger:
                 ax4_twin.plot(episodes, velocities, 'orange', alpha=0.7, label='Avg Velocity')
                 ax4_twin.set_ylabel('Average Velocity', color='orange')
                 ax4_twin.tick_params(axis='y', labelcolor='orange')
+
+            x_max = self._resolve_xmax(episodes)
+            if x_max is not None:
+                ax4.set_xlim(0, x_max)
             
             ax4.set_title('Environment Transitions and Velocity')
             ax4.grid(True, alpha=0.3)

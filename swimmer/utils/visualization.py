@@ -272,8 +272,8 @@ Transition History:
     
     log_content += f"""
 === FILES GENERATED ===
-Video: outputs/improved_mixed_env/improved_adaptation_{n_links}links.mp4
-Plots: outputs/improved_mixed_env/improved_environment_analysis_{n_links}links.png
+Video: results/mixed_env/mixed_env_adaptation_{n_links}links.mp4
+Plots: results/mixed_env/mixed_env_analysis_{n_links}links.png
 Parameter Log: {save_path}
 
 === NOTES ===
@@ -323,7 +323,7 @@ def add_zone_overlay(frame, task, current_env):
     except ImportError:
         return frame
 
-def plot_training_results(log_file, save_path):
+def plot_training_results(log_file, save_path, training_steps=None):
     """
     Plots training results from a Tonic log file.
     """
@@ -332,6 +332,12 @@ def plot_training_results(log_file, save_path):
 
     try:
         df = pd.read_csv(log_file)
+        step_series = df['step'] if 'step' in df.columns else np.arange(len(df))
+        x_max = float(step_series.max()) if len(step_series) > 0 else 0.0
+        if training_steps is not None and training_steps > 0:
+            x_max = max(x_max, float(training_steps))
+        if x_max <= 0 and len(df) > 0:
+            x_max = float(len(df))
         
         fig, axes = plt.subplots(1, 2, figsize=(18, 6))
         
@@ -341,6 +347,8 @@ def plot_training_results(log_file, save_path):
             ax1.set_title('Training Score Over Time')
             ax1.set_xlabel('Training Step')
             ax1.set_ylabel('Mean Episode Score')
+            if x_max > 0:
+                ax1.set_xlim(0, x_max)
             ax1.grid(True)
 
             if 'test/episode_score/std' in df.columns:
@@ -353,6 +361,8 @@ def plot_training_results(log_file, save_path):
             ax2.set_title('Episode Length Over Time')
             ax2.set_xlabel('Training Step')
             ax2.set_ylabel('Mean Episode Length')
+            if x_max > 0:
+                ax2.set_xlim(0, x_max)
             ax2.grid(True)
         
         plt.tight_layout()

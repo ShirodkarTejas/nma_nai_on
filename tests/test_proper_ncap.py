@@ -6,7 +6,7 @@ Test script to compare proper NCAP implementation with current one
 import torch
 import numpy as np
 from swimmer.models.proper_ncap import ProperSwimmerModule, ProperSwimmerActor
-from swimmer.environments.mixed_environment import test_improved_mixed_environment
+from swimmer.environments.mixed_environment import test_mixed_environment
 from swimmer.models.ncap_swimmer import NCAPSwimmer
 import time
 

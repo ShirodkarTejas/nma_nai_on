@@ -8,7 +8,7 @@ import torch
 import numpy as np
 from swimmer.models.simple_ncap import SimpleNCAPSwimmer
 from swimmer.environments.simple_swimmer import SimpleSwimmerEnv
-from swimmer.environments.mixed_environment import ImprovedMixedSwimmerEnv
+from swimmer.environments.mixed_environment import MixedSwimmerEnv
 from swimmer.environments.physics_fix import create_fixed_swimmer_env
 
 
@@ -26,7 +26,7 @@ def test_ncap_in_different_environments():
     # Test environments
     environments = {
         "Simple Environment": SimpleSwimmerEnv(n_links=5),
-        "Complex Environment": ImprovedMixedSwimmerEnv(n_links=5), 
+        "Complex Environment": MixedSwimmerEnv(n_links=5), 
         "Complex + Gear Fix": create_fixed_swimmer_env(n_links=5, gear_ratio=0.1)
     }
     
