@@ -37,15 +37,17 @@ class SimpleSwim(swimmer.Swimmer):
         return obs
 
     def get_reward(self, physics):
-        """Simple forward swimming reward."""
+        """Forward swimming reward: amplified velocity signal plus step-level time penalty."""
         forward_velocity = -physics.named.data.sensordata['head_vel'][1]
-        return rewards.tolerance(
+        velocity_reward = 10.0 * rewards.tolerance(
             forward_velocity,
             bounds=(self._desired_speed, float('inf')),
             margin=self._desired_speed,
             value_at_margin=0.,
             sigmoid='linear',
         )
+        time_penalty = -0.01  # Urgency: penalise every wasted step
+        return velocity_reward + time_penalty
 
 @swimmer.SUITE.add()
 def simple_swim(

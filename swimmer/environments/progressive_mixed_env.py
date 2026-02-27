@@ -821,10 +821,9 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                         pass
                 self._last_on_land = False
         
-        # **FIX: Add small baseline activity reward to prevent completely negative rewards**
-        joint_velocities = physics.data.qvel
-        joint_activity = np.sum(np.abs(joint_velocities))
-        baseline_activity_reward = min(joint_activity * 0.01, 0.1)  # Small positive reward for any movement
+        # Time penalty: every step costs points, forcing the agent to reach targets quickly.
+        # This eliminates any passive reward accumulation from surviving the episode.
+        time_penalty = -0.01
         
         # **FIX: Add environment diversity bonus**
         environment_diversity_bonus = 0.0
@@ -907,16 +906,16 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 progress_made = max(0, self._initial_target_distance - distance_to_target)
                 progress_ratio = progress_made / self._initial_target_distance
                 
-                # Reward based on cumulative progress (diminishes over time spent)
+                # Reward based on cumulative progress (diminishes over time spent), amplified 10x
                 time_factor = max(0.1, 1.0 - (self._target_visit_timer / 900.0))  # Decay over 30 seconds
-                progress_reward = progress_ratio * 2.0 * time_factor * target_type_multiplier  # **APPLY TARGET BONUS**
+                progress_reward = progress_ratio * 20.0 * time_factor * target_type_multiplier
                 navigation_reward += progress_reward
                 
                 # Small directional bonus only when making progress
                 if self._target_visit_timer > 30:  # After 1 second
                     recent_progress = max(0, self._last_distance - distance_to_target) if hasattr(self, '_last_distance') else 0
                     if recent_progress > 0.01:  # Actually moving toward target
-                        navigation_reward += 0.2 * target_type_multiplier  # **APPLY TARGET BONUS**
+                        navigation_reward += 2.0 * target_type_multiplier  # Amplified 10x
                 
                 self._last_distance = distance_to_target
             else:
@@ -939,8 +938,9 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             
             # ONLY advance target if actually reached
             if target_reached:
-                # **MASSIVE REWARD** for reaching target (with type bonus)
-                target_completion_reward = 10.0 * target_type_multiplier  # **LAND TARGETS WORTH MORE**
+                # JACKPOT: massive reward for reaching the target.
+                # 500 base, up to 1000 for land targets. Dwarfs any passive reward accumulation.
+                target_completion_reward = 500.0 * target_type_multiplier
                 navigation_reward += target_completion_reward
                 
                 # **ENHANCED**: Log target completion with environment info
@@ -977,7 +977,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                             tqdm.write(f"🏆 Phase targets completed! ({self._targets_reached} total targets)")
                         except ImportError:
                             pass  
-                    navigation_reward += 20.0  
+                    navigation_reward += 1000.0  # Full-phase completion jackpot
                     # Reset to first target for continuous cycling
                     self._current_target_index = 0
             
@@ -994,11 +994,11 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     if velocity_magnitude > 0.01:  # Only if actually moving
                         velocity_direction = current_velocity / velocity_magnitude
                         directional_alignment = np.dot(target_direction, velocity_direction)
-                        # Apply target type bonus to directional rewards too
-                        navigation_reward += directional_alignment * 0.3 * target_type_multiplier
+                        # Apply target type bonus to directional rewards too (10x amplified)
+                        navigation_reward += directional_alignment * 3.0 * target_type_multiplier
         
-        # **FINAL REWARD CALCULATION**: Navigation dominates, with diversity bonus, no penalties
-        total_reward = base_reward * 0.1 + navigation_reward * 1.0 + environment_diversity_bonus * 0.1 + baseline_activity_reward
+        # **FINAL REWARD CALCULATION**: Navigation dominates, with diversity bonus and step penalty.
+        total_reward = base_reward * 0.1 + navigation_reward * 1.0 + environment_diversity_bonus * 0.1 + time_penalty
         
         return total_reward
 

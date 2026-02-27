@@ -207,8 +207,8 @@ class MixedEnvironmentSwim(swimmer.Swimmer):
         # Use different speed targets depending on medium
         target_speed = _SWIM_SPEED if current_env == EnvironmentType.WATER else _CRAWL_SPEED
 
-        # Increase target-directed locomotion weighting to avoid stationary local optima.
-        reward = 4.5 * rewards.tolerance(
+        # Heavily weighted target-directed velocity reward.
+        reward = 9.0 * rewards.tolerance(
             target_velocity,
             bounds=(target_speed, float('inf')),
             margin=target_speed,
@@ -217,13 +217,13 @@ class MixedEnvironmentSwim(swimmer.Swimmer):
         )
 
         # ----------------------------------------------------------------
-        # FORWARD MOMENTUM BONUS
+        # FORWARD MOMENTUM BONUS (amplified 8x)
         # Extra reward for sustained, meaningful forward velocity.  This
         # distinguishes real forward swimming from the zero-mean "shivering"
         # that the primary tolerance reward cannot fully prevent.
         # ----------------------------------------------------------------
         if target_velocity > 0.05:
-            reward += 1.0 * target_velocity
+            reward += 8.0 * target_velocity
 
         # ----------------------------------------------------------------
         # ANTI-TWITCHING: joint-velocity (activity) penalty
@@ -266,14 +266,16 @@ class MixedEnvironmentSwim(swimmer.Swimmer):
         excessive_torque = np.sum(np.maximum(0.0, np.abs(ctrl) - 0.8) ** 2)
         reward -= excessive_torque * 0.03
 
-        # Small constant incentive to keep moving (helps exploration).
-        reward += 0.01
+        # Time penalty: every idle step costs points, forcing urgency toward targets.
+        reward -= 0.01
 
         # -------- Milestone bonuses --------
-        # One-time bonus when the swimmer reaches land for the first time in episode
+        # Massive one-time jackpot when the swimmer reaches a land zone for the first time.
+        # This dwarfs any passive reward accumulation and teaches the agent that
+        # reaching the target is the primary objective.
         if current_env == EnvironmentType.LAND and not getattr(self, '_land_reached', False):
             self._land_reached = True
-            reward += 0.3
+            reward += 500.0
 
         # Distance-based shaping every 0.5 m from initial position
         dist_from_start = np.linalg.norm(head_pos - self._initial_position)
