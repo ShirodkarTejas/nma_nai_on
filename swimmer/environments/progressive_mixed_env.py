@@ -11,8 +11,12 @@ from dm_control import suite
 from dm_control.suite import swimmer
 from dm_control.rl import control
 from dm_control.utils import rewards
-import gym
-from gym import spaces
+try:
+    import gymnasium as gym
+    from gymnasium import spaces
+except ImportError:
+    import gym
+    from gym import spaces
 from .physics_fix import apply_swimming_physics_fix
 
 # **NEW**: Enhanced 3D visualization imports
@@ -29,6 +33,12 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                  water_viscosity=0.001,
                  land_viscosity=0.05,  # **REDUCED** from 1.5 to 0.15 - more reasonable crawling resistance
                  training_progress=0.0,  # 0.0 = pure swimming, 1.0 = full mixed
+                 expose_environment_observation=True,
+                 expose_viscosity_observation=True,
+                 anisotropic_drag_mode='off',
+                 anisotropic_drag_ratio=10.0,
+                 anisotropic_drag_gain=0.02,
+                 anisotropic_drag_land_only=True,
                  **kwargs):
         super().__init__(**kwargs)
         self._desired_speed = desired_speed
@@ -36,6 +46,12 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         self._water_viscosity = water_viscosity
         self._land_viscosity = land_viscosity
         self._training_progress = training_progress
+        self._expose_environment_observation = expose_environment_observation
+        self._expose_viscosity_observation = expose_viscosity_observation
+        self._anisotropic_drag_mode = anisotropic_drag_mode
+        self._anisotropic_drag_ratio = anisotropic_drag_ratio
+        self._anisotropic_drag_gain = anisotropic_drag_gain
+        self._anisotropic_drag_land_only = anisotropic_drag_land_only
         
         # Progressive complexity based on training progress
         self._current_land_zones = self._get_progressive_land_zones()
@@ -63,6 +79,10 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         # **NEW**: 3D visualization tracking
         self._zone_indicators_created = False
         self._last_visualization_phase = -1
+        
+        # State for anisotropic drag proxy experiments.
+        self._segment_body_names = []
+        self._previous_body_positions = None
         
     # Note: Timeout calculation removed - agent must reach targets to advance, no more reward hacking!
     
@@ -173,8 +193,120 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         # Set progressive environment properties
         self._update_environment_physics(physics)
         
+        # Reset anisotropic drag state each episode.
+        self._segment_body_names = self._identify_segment_bodies(physics)
+        self._previous_body_positions = self._get_body_positions(physics, self._segment_body_names)
+        self._clear_applied_forces(physics)
+        
         # **NEW**: Add 3D zone and target visualization
         self._setup_3d_visualization(physics)
+
+    def _identify_segment_bodies(self, physics):
+        """Identify swimmer segment bodies for drag-proxy experiments."""
+        try:
+            all_names = list(physics.named.data.xpos.axes.row.names)
+        except Exception:
+            return []
+        
+        body_names = [
+            name for name in all_names
+            if ('head' in name or 'link' in name or 'torso' in name or 'body' in name)
+        ]
+        return body_names
+
+    def _get_body_positions(self, physics, body_names):
+        """Return XY positions for each tracked body segment."""
+        positions = []
+        for body_name in body_names:
+            try:
+                positions.append(np.array(physics.named.data.xpos[body_name][:2], dtype=np.float32))
+            except Exception:
+                continue
+        return np.array(positions, dtype=np.float32) if positions else np.zeros((0, 2), dtype=np.float32)
+
+    def _in_land_zone(self, position_xy):
+        """Check whether a 2D position lies in any active land zone."""
+        for zone in self._current_land_zones:
+            if np.linalg.norm(position_xy - np.array(zone['center'], dtype=np.float32)) < zone['radius']:
+                return True
+        return False
+
+    def _clear_applied_forces(self, physics):
+        """Reset any externally applied forces from the drag proxy."""
+        try:
+            physics.data.xfrc_applied[:] = 0.0
+        except Exception:
+            pass
+
+    def _apply_anisotropic_drag_proxy(self, physics):
+        """
+        Apply a simple anisotropic drag proxy.
+        
+        This is not a full contact-mechanics model. It approximates the literature's
+        normal-vs-tangential drag asymmetry by penalizing lateral body motion more than
+        motion along each segment's instantaneous axis.
+        """
+        if self._anisotropic_drag_mode != 'proxy':
+            self._clear_applied_forces(physics)
+            return
+        
+        if not self._segment_body_names:
+            self._segment_body_names = self._identify_segment_bodies(physics)
+        
+        current_positions = self._get_body_positions(physics, self._segment_body_names)
+        if len(current_positions) == 0:
+            return
+        
+        if self._previous_body_positions is None or len(self._previous_body_positions) != len(current_positions):
+            self._previous_body_positions = current_positions.copy()
+            self._clear_applied_forces(physics)
+            return
+        
+        dt = max(float(swimmer._CONTROL_TIMESTEP), 1e-6)
+        velocities = (current_positions - self._previous_body_positions) / dt
+        self._clear_applied_forces(physics)
+        
+        for idx, body_name in enumerate(self._segment_body_names[:len(current_positions)]):
+            body_pos = current_positions[idx]
+            if self._anisotropic_drag_land_only and not self._in_land_zone(body_pos):
+                continue
+            
+            if len(current_positions) == 1:
+                tangent = np.array([1.0, 0.0], dtype=np.float32)
+            elif idx < len(current_positions) - 1:
+                tangent = current_positions[idx + 1] - current_positions[idx]
+            else:
+                tangent = current_positions[idx] - current_positions[idx - 1]
+            
+            norm = np.linalg.norm(tangent)
+            if norm < 1e-6:
+                tangent = np.array([1.0, 0.0], dtype=np.float32)
+            else:
+                tangent = tangent / norm
+            
+            normal = np.array([-tangent[1], tangent[0]], dtype=np.float32)
+            velocity = velocities[idx]
+            v_tangent = float(np.dot(velocity, tangent))
+            v_normal = float(np.dot(velocity, normal))
+            
+            drag_force_xy = -self._anisotropic_drag_gain * (
+                v_tangent * tangent +
+                self._anisotropic_drag_ratio * v_normal * normal
+            )
+            
+            try:
+                body_id = physics.model.name2id(body_name, 'body')
+                physics.data.xfrc_applied[body_id, 0] = drag_force_xy[0]
+                physics.data.xfrc_applied[body_id, 1] = drag_force_xy[1]
+            except Exception:
+                continue
+        
+        self._previous_body_positions = current_positions.copy()
+
+    def before_step(self, action, physics):
+        """Apply optional drag proxy before MuJoCo integrates the next step."""
+        self._apply_anisotropic_drag_proxy(physics)
+        return super().before_step(action, physics)
 
     def _setup_3d_visualization(self, physics):
         """Setup enhanced 3D visual indicators for zones and targets."""
@@ -735,10 +867,24 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             
             self._last_environment = current_environment
             
-            obs['fluid_viscosity'] = np.array([current_viscosity], dtype=np.float32)
-            obs['environment_type'] = np.array([1.0 if in_water else 0.0, 1.0 if in_land else 0.0], dtype=np.float32)
-            obs['in_water_zone'] = np.array([1.0 if in_water else 0.0], dtype=np.float32)
-            obs['in_land_zone'] = np.array([1.0 if in_land else 0.0], dtype=np.float32)
+            if self._expose_viscosity_observation:
+                obs['fluid_viscosity'] = np.array([current_viscosity], dtype=np.float32)
+            else:
+                obs['fluid_viscosity'] = np.array([0.0], dtype=np.float32)
+            
+            if self._expose_environment_observation:
+                obs['environment_type'] = np.array([1.0 if in_water else 0.0, 1.0 if in_land else 0.0], dtype=np.float32)
+                obs['in_water_zone'] = np.array([1.0 if in_water else 0.0], dtype=np.float32)
+                obs['in_land_zone'] = np.array([1.0 if in_land else 0.0], dtype=np.float32)
+            else:
+                obs['environment_type'] = np.array([0.0, 0.0], dtype=np.float32)
+                obs['in_water_zone'] = np.array([0.0], dtype=np.float32)
+                obs['in_land_zone'] = np.array([0.0], dtype=np.float32)
+        else:
+            obs['fluid_viscosity'] = np.array([0.0 if not self._expose_viscosity_observation else self._water_viscosity], dtype=np.float32)
+            obs['environment_type'] = np.array([0.0, 0.0] if not self._expose_environment_observation else [1.0, 0.0], dtype=np.float32)
+            obs['in_water_zone'] = np.array([0.0 if not self._expose_environment_observation else 1.0], dtype=np.float32)
+            obs['in_land_zone'] = np.array([0.0], dtype=np.float32)
         
         # **NEW**: Update target visualization dynamically (pulsing effect)
         self._update_dynamic_target_visualization(physics)
@@ -1007,6 +1153,12 @@ def progressive_swim_crawl(
     n_links=6,
     desired_speed=_SWIM_SPEED,
     training_progress=0.0,
+    expose_environment_observation=True,
+    expose_viscosity_observation=True,
+    anisotropic_drag_mode='off',
+    anisotropic_drag_ratio=10.0,
+    anisotropic_drag_gain=0.02,
+    anisotropic_drag_land_only=True,
     time_limit=swimmer._DEFAULT_TIME_LIMIT,
     random=None,
     environment_kwargs={},
@@ -1022,6 +1174,12 @@ def progressive_swim_crawl(
     task = ProgressiveSwimCrawl(
         desired_speed=desired_speed,
         training_progress=training_progress,
+        expose_environment_observation=expose_environment_observation,
+        expose_viscosity_observation=expose_viscosity_observation,
+        anisotropic_drag_mode=anisotropic_drag_mode,
+        anisotropic_drag_ratio=anisotropic_drag_ratio,
+        anisotropic_drag_gain=anisotropic_drag_gain,
+        anisotropic_drag_land_only=anisotropic_drag_land_only,
         random=random
     )
     
@@ -1036,7 +1194,10 @@ def progressive_swim_crawl(
 class ProgressiveMixedSwimmerEnv:
     """Progressive wrapper that manages training curriculum."""
     
-    def __init__(self, n_links=5, desired_speed=_SWIM_SPEED, time_limit=3000):
+    def __init__(self, n_links=5, desired_speed=_SWIM_SPEED, time_limit=3000,
+                 expose_environment_observation=True, expose_viscosity_observation=True,
+                 anisotropic_drag_mode='off', anisotropic_drag_ratio=10.0,
+                 anisotropic_drag_gain=0.02, anisotropic_drag_land_only=True):
         self.n_links = n_links
         self.desired_speed = desired_speed
         self.time_limit = time_limit
@@ -1044,6 +1205,12 @@ class ProgressiveMixedSwimmerEnv:
         self.total_episodes = 0
         self.target_episodes = 1000000  # 1M episodes for full curriculum
         self.manual_progress_override = False  # For testing purposes
+        self.expose_environment_observation = expose_environment_observation
+        self.expose_viscosity_observation = expose_viscosity_observation
+        self.anisotropic_drag_mode = anisotropic_drag_mode
+        self.anisotropic_drag_ratio = anisotropic_drag_ratio
+        self.anisotropic_drag_gain = anisotropic_drag_gain
+        self.anisotropic_drag_land_only = anisotropic_drag_land_only
         
         # Create initial environment
         self._create_environment()
@@ -1056,7 +1223,13 @@ class ProgressiveMixedSwimmerEnv:
             task_kwargs={
                 'random': 1, 
                 'n_links': self.n_links,
-                'training_progress': self.training_progress
+                'training_progress': self.training_progress,
+                'expose_environment_observation': self.expose_environment_observation,
+                'expose_viscosity_observation': self.expose_viscosity_observation,
+                'anisotropic_drag_mode': self.anisotropic_drag_mode,
+                'anisotropic_drag_ratio': self.anisotropic_drag_ratio,
+                'anisotropic_drag_gain': self.anisotropic_drag_gain,
+                'anisotropic_drag_land_only': self.anisotropic_drag_land_only
             }
         )
         self.physics = self.env.physics
@@ -1166,11 +1339,23 @@ class TonicProgressiveMixedWrapper(gym.Env):
     Gym wrapper for progressive mixed environment compatible with Tonic.
     """
     
-    def __init__(self, n_links=5, time_feature=True, desired_speed=_SWIM_SPEED):
+    def __init__(self, n_links=5, time_feature=True, desired_speed=_SWIM_SPEED,
+                 expose_environment_observation=True, expose_viscosity_observation=True,
+                 anisotropic_drag_mode='off', anisotropic_drag_ratio=10.0,
+                 anisotropic_drag_gain=0.02, anisotropic_drag_land_only=True):
         super().__init__()
         
         # Create the underlying environment
-        self.env = ProgressiveMixedSwimmerEnv(n_links=n_links, desired_speed=desired_speed)
+        self.env = ProgressiveMixedSwimmerEnv(
+            n_links=n_links,
+            desired_speed=desired_speed,
+            expose_environment_observation=expose_environment_observation,
+            expose_viscosity_observation=expose_viscosity_observation,
+            anisotropic_drag_mode=anisotropic_drag_mode,
+            anisotropic_drag_ratio=anisotropic_drag_ratio,
+            anisotropic_drag_gain=anisotropic_drag_gain,
+            anisotropic_drag_land_only=anisotropic_drag_land_only
+        )
         
         # Get action space from environment
         action_spec = self.env.action_spec

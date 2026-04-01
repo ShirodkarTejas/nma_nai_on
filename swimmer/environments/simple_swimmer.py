@@ -10,8 +10,12 @@ from dm_control import suite
 from dm_control.suite import swimmer
 from dm_control.rl import control
 from dm_control.utils import rewards
-import gym
-from gym import spaces
+try:
+    import gymnasium as gym
+    from gymnasium import spaces
+except ImportError:
+    import gym
+    from gym import spaces
 
 _SWIM_SPEED = 0.1
 

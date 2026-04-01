@@ -18,6 +18,88 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore", message=".*This figure includes Axes that are not compatible with tight_layout.*")
 
 
+def _should_force_land_start(env, phase):
+    if phase < 1:
+        return False
+    inner_env = getattr(env, "env", None)
+    if getattr(inner_env, "prefer_transition_evaluation", False):
+        return False
+    return True
+
+
+def _save_video_previews(save_path, frames, fps=30):
+    if not frames:
+        return
+
+    base_path, _ = os.path.splitext(save_path)
+    gif_path = base_path + "_preview.gif"
+    png_path = base_path + "_contact_sheet.png"
+
+    try:
+        preview_count = min(120, len(frames))
+        preview_indices = np.linspace(0, len(frames) - 1, preview_count, dtype=int)
+        preview_frames = [frames[idx] for idx in preview_indices]
+        imageio.mimsave(gif_path, preview_frames, fps=min(fps, 12))
+        print(f"🖼️ GIF preview saved to: {gif_path}")
+    except Exception as e:
+        print(f"⚠️ GIF preview save error: {e}")
+
+    try:
+        sheet_count = min(12, len(frames))
+        sheet_indices = np.linspace(0, len(frames) - 1, sheet_count, dtype=int)
+        cols = 4
+        rows = int(np.ceil(sheet_count / cols))
+        fig, axes = plt.subplots(rows, cols, figsize=(cols * 3.2, rows * 2.4))
+        axes = np.atleast_1d(axes).reshape(rows, cols)
+
+        for axis in axes.flat:
+            axis.axis("off")
+
+        for axis, idx in zip(axes.flat, sheet_indices):
+            axis.imshow(frames[idx])
+            axis.set_title(f"f{idx}", fontsize=8)
+            axis.axis("off")
+
+        fig.tight_layout()
+        fig.savefig(png_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"🖼️ Contact sheet saved to: {png_path}")
+    except Exception as e:
+        print(f"⚠️ Contact sheet save error: {e}")
+
+
+def _save_video_file(save_path, frames, fps=30):
+    if not frames:
+        return False
+
+    try:
+        writer = imageio.get_writer(
+            save_path,
+            format="FFMPEG",
+            mode="I",
+            fps=fps,
+            codec="libx264",
+            pixelformat="yuv420p",
+            macro_block_size=16,
+        )
+        try:
+            for frame in frames:
+                writer.append_data(np.asarray(frame, dtype=np.uint8))
+        finally:
+            writer.close()
+        return True
+    except Exception as e:
+        print(f"⚠️ Primary MP4 writer failed: {e}")
+
+    try:
+        imageio.mimsave(save_path, [np.asarray(frame, dtype=np.uint8) for frame in frames], fps=fps)
+        print("⚠️ Used fallback MP4 writer")
+        return True
+    except Exception as e:
+        print(f"❌ Video save error: {e}")
+        return False
+
+
 def add_minimap(frame, land_zones, swimmer_pos, frame_width, frame_height):
     """Add a minimap showing environment zones and swimmer position."""
     import cv2
@@ -438,14 +520,7 @@ def add_zone_indicators_with_trail(frame, env, step_count, position_history, sho
 def create_trajectory_analysis(agent, env, save_path, num_steps=500, phase_name="", trajectory_multiplier=1.0):
     """Create detailed trajectory analysis similar to trained_model_analysis style."""
     
-    # Create organized output directory
-    plots_dir = os.path.join("outputs", "curriculum_training", "plots")
-    os.makedirs(plots_dir, exist_ok=True)
-    
-    # Update save path to use organized structure
-    if not save_path.startswith("outputs/curriculum_training/"):
-        filename = os.path.basename(save_path)
-        save_path = os.path.join(plots_dir, filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
     # Apply trajectory multiplier from configuration
     actual_steps = int(num_steps * trajectory_multiplier)
@@ -710,27 +785,26 @@ def create_trajectory_analysis(agent, env, save_path, num_steps=500, phase_name=
 def create_curriculum_plots(phase_rewards, phase_distances, eval_results, save_path):
     """Create comprehensive plots for curriculum training progress."""
     
-    # Create organized output directory
-    plots_dir = os.path.join("outputs", "curriculum_training", "plots")
-    os.makedirs(plots_dir, exist_ok=True)
-    
-    # Update save path to use organized structure
-    if not save_path.startswith("outputs/curriculum_training/"):
-        filename = os.path.basename(save_path)
-        save_path = os.path.join(plots_dir, filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
     
     # Phase names for plotting
     phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
     colors = ['blue', 'green', 'orange', 'red']
+
+    def _finite_array(values):
+        arr = np.asarray(values, dtype=np.float32)
+        return arr[np.isfinite(arr)]
     
     # 1. Reward progression by phase
     ax1.set_title('Reward Progress by Training Phase', fontsize=14, fontweight='bold')
     legend_added = False
     for phase in range(4):
         if phase in phase_rewards and len(phase_rewards[phase]) > 0:
-            rewards = phase_rewards[phase]
+            rewards = _finite_array(phase_rewards[phase])
+            if len(rewards) == 0:
+                continue
             episodes = range(len(rewards))
             # Plot raw data with markers
             ax1.plot(episodes, rewards, color=colors[phase], alpha=0.4, linewidth=1, 
@@ -759,7 +833,9 @@ def create_curriculum_plots(phase_rewards, phase_distances, eval_results, save_p
     legend_added_dist = False
     for phase in range(4):
         if phase in phase_distances and len(phase_distances[phase]) > 0:
-            distances = phase_distances[phase]
+            distances = _finite_array(phase_distances[phase])
+            if len(distances) == 0:
+                continue
             episodes = range(len(distances))
             # Plot raw data with markers
             ax2.plot(episodes, distances, color=colors[phase], alpha=0.4, linewidth=1, 
@@ -813,8 +889,10 @@ def create_curriculum_plots(phase_rewards, phase_distances, eval_results, save_p
     
     for phase in range(4):
         episode_count = len(phase_rewards.get(phase, []))
-        avg_reward = np.mean(phase_rewards.get(phase, [0])) if phase_rewards.get(phase) else 0
-        avg_distance = np.mean(phase_distances.get(phase, [0])) if phase_distances.get(phase) else 0
+        finite_rewards = _finite_array(phase_rewards.get(phase, []))
+        finite_distances = _finite_array(phase_distances.get(phase, []))
+        avg_reward = float(np.mean(finite_rewards)) if len(finite_rewards) > 0 else 0
+        avg_distance = float(np.mean(finite_distances)) if len(finite_distances) > 0 else 0
         
         phase_episode_counts.append(episode_count)
         phase_avg_rewards.append(avg_reward)
@@ -1198,14 +1276,7 @@ def add_enhanced_zone_disks(frame, env, step_count, minimap=True):
 def create_test_video(agent, env, save_path, num_steps=300, episode_name="Test Episode", show_minimap=True):
     """Create a video of the agent performing in the environment with zone indicators."""
     
-    # Create organized output directory
-    videos_dir = os.path.join("outputs", "curriculum_training", "videos")
-    os.makedirs(videos_dir, exist_ok=True)
-    
-    # Update save path to use organized structure
-    if not save_path.startswith("outputs/curriculum_training/"):
-        filename = os.path.basename(save_path)
-        save_path = os.path.join(videos_dir, filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
     print(f"🎬 Creating test video: {episode_name}")
     
@@ -1257,9 +1328,9 @@ def create_test_video(agent, env, save_path, num_steps=300, episode_name="Test E
             # Create directory if needed
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             
-            # Save video
-            imageio.mimsave(save_path, frames, fps=30)
-            print(f"🎬 Test video saved to: {save_path} ({len(frames)} frames)")
+            if _save_video_file(save_path, frames, fps=30):
+                print(f"🎬 Test video saved to: {save_path} ({len(frames)} frames)")
+                _save_video_previews(save_path, frames, fps=30)
             
         except Exception as e:
             print(f"❌ Video save error: {e}")
@@ -1269,15 +1340,7 @@ def create_test_video(agent, env, save_path, num_steps=300, episode_name="Test E
 
 def create_phase_comparison_video(agent, env, save_path, phases_to_test=None, phase_video_steps=None):
     """Create a video showing performance across different phases."""
-    
-    # Create organized output directory
-    videos_dir = os.path.join("outputs", "curriculum_training", "videos")
-    os.makedirs(videos_dir, exist_ok=True)
-    
-    # Update save path to use organized structure
-    if not save_path.startswith("outputs/curriculum_training/"):
-        filename = os.path.basename(save_path)
-        save_path = os.path.join(videos_dir, filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
     if phases_to_test is None:
         phases_to_test = [0, 1, 2, 3]  # All phases
@@ -1301,7 +1364,7 @@ def create_phase_comparison_video(agent, env, save_path, phases_to_test=None, ph
             
             # Set environment to specific phase using manual override
             temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
-            force_land_for_evaluation = phase >= 1  # Force land starts for phases 2, 3, 4
+            force_land_for_evaluation = _should_force_land_start(env, phase)
             env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
             
             # Get phase-specific video duration from configuration
@@ -1355,7 +1418,7 @@ def create_phase_comparison_video(agent, env, save_path, phases_to_test=None, ph
                     break
             
             # Update for any remaining frames
-            remaining_frames = 500 - (step // 10) * 10
+            remaining_frames = phase_steps - (step // 10) * 10
             if remaining_frames > 0:
                 video_pbar.update(remaining_frames)
             
@@ -1374,8 +1437,9 @@ def create_phase_comparison_video(agent, env, save_path, phases_to_test=None, ph
         if len(all_frames) > 50:
             try:
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                imageio.mimsave(save_path, all_frames, fps=30)
-                print(f"🎬 Phase comparison video saved to: {save_path} ({len(all_frames)} frames)")
+                if _save_video_file(save_path, all_frames, fps=30):
+                    print(f"🎬 Phase comparison video saved to: {save_path} ({len(all_frames)} frames)")
+                    _save_video_previews(save_path, all_frames, fps=30)
             except Exception as e:
                 print(f"❌ Video save error: {e}")
         else:
@@ -1385,16 +1449,13 @@ def create_phase_comparison_video(agent, env, save_path, phases_to_test=None, ph
 def save_training_summary(eval_results, training_history, save_path):
     """Save a text summary of training results."""
     
-    # Create organized output directory
-    summaries_dir = os.path.join("outputs", "curriculum_training", "summaries")
-    os.makedirs(summaries_dir, exist_ok=True)
-    
-    # Update save path to use organized structure
-    if not save_path.startswith("outputs/curriculum_training/"):
-        filename = os.path.basename(save_path)
-        save_path = os.path.join(summaries_dir, filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
     phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+
+    def _finite_array(values):
+        arr = np.asarray(values, dtype=np.float32)
+        return arr[np.isfinite(arr)]
     
     with open(save_path, 'w') as f:
         f.write("# Curriculum Training Summary\n")
@@ -1421,8 +1482,10 @@ def save_training_summary(eval_results, training_history, save_path):
         for phase in range(4):
             if phase in training_history['phase_rewards']:
                 episodes = len(training_history['phase_rewards'][phase])
-                avg_reward = np.mean(training_history['phase_rewards'][phase]) if episodes > 0 else 0
-                avg_distance = np.mean(training_history['phase_distances'][phase]) if episodes > 0 else 0
+                finite_rewards = _finite_array(training_history['phase_rewards'][phase])
+                finite_distances = _finite_array(training_history['phase_distances'][phase])
+                avg_reward = float(np.mean(finite_rewards)) if len(finite_rewards) > 0 else 0
+                avg_distance = float(np.mean(finite_distances)) if len(finite_distances) > 0 else 0
                 
                 f.write(f"**Phase {phase} - {phase_names[phase]}**:\n")
                 f.write(f"  - Episodes: {episodes}\n")

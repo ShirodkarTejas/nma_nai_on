@@ -60,7 +60,13 @@ class CurriculumNCAPTrainer:
                  algorithm='ppo',  # Algorithm for naming
                  num_workers=8,    # NEW: Number of parallel environments
                  use_multi_gpu=True, # NEW: Use all available GPUs
-                 use_locomotion_only_early_training=True):  # **NEW**: Use pure locomotion for first 30% of training
+                 use_locomotion_only_early_training=True,
+                 expose_environment_observation=True,
+                 expose_viscosity_observation=True,
+                 anisotropic_drag_mode='off',
+                 anisotropic_drag_ratio=10.0,
+                 anisotropic_drag_gain=0.02,
+                 anisotropic_drag_land_only=True):  # **NEW**: Use pure locomotion for first 30% of training
         
         self.n_links = n_links
         self.learning_rate = learning_rate
@@ -78,6 +84,12 @@ class CurriculumNCAPTrainer:
         self.model_type = model_type
         self.algorithm = algorithm
         self.use_locomotion_only_early_training = use_locomotion_only_early_training
+        self.expose_environment_observation = expose_environment_observation
+        self.expose_viscosity_observation = expose_viscosity_observation
+        self.anisotropic_drag_mode = anisotropic_drag_mode
+        self.anisotropic_drag_ratio = anisotropic_drag_ratio
+        self.anisotropic_drag_gain = anisotropic_drag_gain
+        self.anisotropic_drag_land_only = anisotropic_drag_land_only
         
         # Initialize artifact namer for consistent naming across all outputs
         self.artifact_namer = ArtifactNamer(
@@ -130,7 +142,13 @@ class CurriculumNCAPTrainer:
         env = TonicProgressiveMixedWrapper(
             n_links=self.n_links,
             time_feature=True,
-            desired_speed=0.15
+            desired_speed=0.15,
+            expose_environment_observation=self.expose_environment_observation,
+            expose_viscosity_observation=self.expose_viscosity_observation,
+            anisotropic_drag_mode=self.anisotropic_drag_mode,
+            anisotropic_drag_ratio=self.anisotropic_drag_ratio,
+            anisotropic_drag_gain=self.anisotropic_drag_gain,
+            anisotropic_drag_land_only=self.anisotropic_drag_land_only
         )
         return env
     
@@ -229,7 +247,8 @@ class CurriculumNCAPTrainer:
                 if self.training_enabled:
                     for i in range(self.num_workers):
                         self.episode_buffers[i]['obs'].append(obs[i])
-                        self.episode_buffers[i]['actions'].append(actions[i])
+                        # Store detached action snapshots so replay does not retain autograd graphs.
+                        self.episode_buffers[i]['actions'].append(np.asarray(actions[i], dtype=np.float32).copy())
                         self.episode_buffers[i]['timesteps'].append(self.step_counts[i])
                 
                 # step_counts increment moved inside test_step for parallelism consistency
@@ -341,7 +360,19 @@ class CurriculumNCAPTrainer:
                         self.optimizer.zero_grad()
                         policy_loss.backward()
                         torch.nn.utils.clip_grad_norm_(self.ncap_model.parameters(), 0.5)
+                        has_bad_grad = False
+                        for param in self.ncap_model.parameters():
+                            if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
+                                has_bad_grad = True
+                                break
+                        if has_bad_grad:
+                            self.optimizer.zero_grad()
+                            continue
                         self.optimizer.step()
+                        with torch.no_grad():
+                            for param in self.ncap_model.parameters():
+                                if torch.isnan(param).any() or torch.isinf(param).any():
+                                    param.data = torch.nan_to_num(param.data, nan=0.0, posinf=1.0, neginf=-1.0)
                         
                 except Exception as e:
                     import traceback
@@ -488,6 +519,12 @@ class CurriculumNCAPTrainer:
                 'min_oscillator_strength': self.min_oscillator_strength,
                 'min_coupling_strength': self.min_coupling_strength,
                 'biological_constraint_frequency': self.biological_constraint_frequency,
+                'expose_environment_observation': self.expose_environment_observation,
+                'expose_viscosity_observation': self.expose_viscosity_observation,
+                'anisotropic_drag_mode': self.anisotropic_drag_mode,
+                'anisotropic_drag_ratio': self.anisotropic_drag_ratio,
+                'anisotropic_drag_gain': self.anisotropic_drag_gain,
+                'anisotropic_drag_land_only': self.anisotropic_drag_land_only,
             },
             'eval_results': eval_results,
         }
@@ -732,6 +769,9 @@ class CurriculumNCAPTrainer:
             # Step all environments in parallel
             actions = agent.step(obs)
             next_obs, rewards, dones, infos = env.step(actions)
+            rewards = np.asarray(rewards, dtype=np.float32)
+            rewards = np.nan_to_num(rewards, nan=0.0, posinf=0.0, neginf=0.0)
+            dones = np.asarray(dones, dtype=bool)
             agent.add_rewards(rewards)
             
             episode_rewards += rewards
@@ -750,10 +790,12 @@ class CurriculumNCAPTrainer:
                 
                 for idx in done_indices:
                     episode_distance = np.linalg.norm(current_head_positions[idx] - initial_positions[idx])
+                    episode_reward_value = float(np.nan_to_num(episode_rewards[idx], nan=0.0, posinf=0.0, neginf=0.0))
+                    episode_distance_value = float(np.nan_to_num(episode_distance, nan=0.0, posinf=0.0, neginf=0.0))
                     
                     self.current_episode += 1
-                    self.phase_rewards[current_phase].append(episode_rewards[idx])
-                    self.phase_distances[current_phase].append(episode_distance)
+                    self.phase_rewards[current_phase].append(episode_reward_value)
+                    self.phase_distances[current_phase].append(episode_distance_value)
                     
                     # Log to file periodically
                     if self.current_episode % self.log_episodes == 0:
@@ -761,8 +803,8 @@ class CurriculumNCAPTrainer:
                             'step': self.current_step,
                             'episode': self.current_episode,
                             'phase': current_phase,
-                            'reward': episode_rewards[idx],
-                            'distance': episode_distance,
+                            'reward': episode_reward_value,
+                            'distance': episode_distance_value,
                         })
                     
                     # Reset worker state
@@ -1003,11 +1045,9 @@ class CurriculumNCAPTrainer:
                 pbar.set_description(f"📊 Analyzing {phase_names[phase]}")
                 
                 # Set environment to specific phase using manual override
-                temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
-                force_land_for_evaluation = phase >= 1  # Force land starts for phases 2, 3, 4
-                
-                # Create a temporary single environment for analysis
                 eval_env = self.create_environment()
+                temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
+                force_land_for_evaluation = phase >= 1 and not getattr(eval_env.env, 'prefer_transition_evaluation', False)
                 eval_env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 trajectory_path = self.artifact_namer.analysis_plot_name(
@@ -1159,11 +1199,9 @@ class CurriculumNCAPTrainer:
                 vis_pbar.set_description(f"📊 Analyzing {phase_names[phase]}")
                 
                 # Set environment to specific phase
-                temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
-                force_land_for_evaluation = phase >= 1  # Force land starts for phases 2, 3, 4
-                
-                # Create temporary environment for analysis
                 eval_env = self.create_environment()
+                temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
+                force_land_for_evaluation = phase >= 1 and not getattr(eval_env.env, 'prefer_transition_evaluation', False)
                 eval_env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 eval_trajectory_path = self.artifact_namer.analysis_plot_name(
@@ -1207,9 +1245,9 @@ class CurriculumNCAPTrainer:
             for phase in range(4):
                 vis_pbar.set_description(f"🎬 Creating {phase_names[phase]} video")
                 
-                temp_progress = (phase + 0.5) * 0.25
-                force_land_for_evaluation = phase >= 1
                 eval_env = self.create_environment()
+                temp_progress = (phase + 0.5) * 0.25
+                force_land_for_evaluation = phase >= 1 and not getattr(eval_env.env, 'prefer_transition_evaluation', False)
                 eval_env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 phase_video_path = self.artifact_namer.evaluation_video_name(

@@ -6,7 +6,10 @@ Enables parallel execution of multiple environment instances using multiprocessi
 
 import numpy as np
 import multiprocessing as mp
-from gym import spaces
+try:
+    from gymnasium import spaces
+except ImportError:
+    from gym import spaces
 
 def worker(remote, parent_remote, env_fn):
     parent_remote.close()

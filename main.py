@@ -45,6 +45,18 @@ def main():
                        help='Number of parallel environment workers')
     parser.add_argument('--use_multi_gpu', action='store_true', default=True,
                        help='Use multiple GPUs if available')
+    parser.add_argument('--hide_environment_observation', action='store_true',
+                       help='Zero out privileged water/land observation channels for ablations')
+    parser.add_argument('--hide_viscosity_observation', action='store_true',
+                       help='Zero out viscosity observation channel for ablations')
+    parser.add_argument('--anisotropic_drag_mode', choices=['off', 'proxy'], default='off',
+                       help='Optional anisotropic drag experiment mode')
+    parser.add_argument('--anisotropic_drag_ratio', type=float, default=10.0,
+                       help='Normal-to-tangential drag ratio for the anisotropic proxy')
+    parser.add_argument('--anisotropic_drag_gain', type=float, default=0.02,
+                       help='Overall strength of the anisotropic drag proxy')
+    parser.add_argument('--anisotropic_drag_all_media', action='store_true',
+                       help='Apply anisotropic drag proxy in both water and land instead of land only')
     
     args = parser.parse_args()
     
@@ -81,7 +93,13 @@ def main():
             num_workers=args.num_workers,
             use_multi_gpu=args.use_multi_gpu,
             oscillator_period=args.oscillator_period,
-            use_locomotion_only_early_training=args.use_locomotion_only_early_training
+            use_locomotion_only_early_training=args.use_locomotion_only_early_training,
+            expose_environment_observation=not args.hide_environment_observation,
+            expose_viscosity_observation=not args.hide_viscosity_observation,
+            anisotropic_drag_mode=args.anisotropic_drag_mode,
+            anisotropic_drag_ratio=args.anisotropic_drag_ratio,
+            anisotropic_drag_gain=args.anisotropic_drag_gain,
+            anisotropic_drag_land_only=not args.anisotropic_drag_all_media
         )
         trainer.train()
     elif args.mode == 'evaluate_curriculum':
@@ -96,7 +114,13 @@ def main():
             resume_from_checkpoint=args.resume_checkpoint,
             model_type=args.model_type,
             algorithm=args.algorithm,
-            use_locomotion_only_early_training=args.use_locomotion_only_early_training
+            use_locomotion_only_early_training=args.use_locomotion_only_early_training,
+            expose_environment_observation=not args.hide_environment_observation,
+            expose_viscosity_observation=not args.hide_viscosity_observation,
+            anisotropic_drag_mode=args.anisotropic_drag_mode,
+            anisotropic_drag_ratio=args.anisotropic_drag_ratio,
+            anisotropic_drag_gain=args.anisotropic_drag_gain,
+            anisotropic_drag_land_only=not args.anisotropic_drag_all_media
         )
         trainer.evaluate_only(
             eval_episodes=args.eval_episodes,

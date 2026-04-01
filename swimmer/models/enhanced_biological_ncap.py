@@ -316,10 +316,12 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
                 env_tensor = torch.as_tensor(environment_type, device=joint_pos.device, dtype=torch.float32)
                 if env_tensor.dim() == 1:
                     env_tensor = env_tensor.unsqueeze(0).expand(joint_pos.shape[0], -1)
+                env_tensor = torch.nan_to_num(env_tensor, nan=0.0, posinf=1.0, neginf=0.0)
                 
                 water_flag = env_tensor[:, 0]
                 land_flag = env_tensor[:, 1]
                 viscosity_norm = env_tensor[:, 2] if env_tensor.shape[1] >= 3 else torch.zeros_like(water_flag) + 0.1
+                viscosity_norm = torch.nan_to_num(viscosity_norm, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
                 
                 # Use masks for adaptation scaling
                 land_mask = land_flag > 0.5
@@ -347,6 +349,7 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
                 target_tensor = torch.as_tensor(target_direction, device=joint_pos.device, dtype=torch.float32)
                 if target_tensor.dim() == 1:
                     target_tensor = target_tensor.unsqueeze(0).expand(joint_pos.shape[0], -1)
+                target_tensor = torch.nan_to_num(target_tensor, nan=0.0, posinf=0.0, neginf=0.0)
                 
                 target_x = target_tensor[:, 0]
                 
@@ -360,6 +363,14 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
                 # Reshape directional_bias if batch size changed
                 if self.directional_bias.shape != lateral_bias.shape:
                     self.directional_bias = torch.zeros_like(lateral_bias)
+                else:
+                    # Break graph history and sanitize persistent state each forward.
+                    self.directional_bias = torch.nan_to_num(
+                        self.directional_bias.detach(),
+                        nan=0.0,
+                        posinf=0.0,
+                        neginf=0.0
+                    )
                 
                 self.directional_bias = (self.directional_bias * (1.0 - self.goal_persistence) + 
                                        lateral_bias * self.goal_persistence)
@@ -482,6 +493,7 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
         
         # **ENHANCED BIOLOGICAL AMPLITUDE SCALING**
         final_torques = base_torques * amplitude_scale.unsqueeze(-1)
+        final_torques = torch.nan_to_num(final_torques, nan=0.0, posinf=0.0, neginf=0.0)
         
         # 6. FINAL BOUNDS (ensure biological range is maintained)
         final_torques = torch.clamp(final_torques, -1.0, 1.0)
@@ -492,6 +504,7 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
         # Add small exploration noise during training
         if self.training:
             final_torques = final_torques + 0.02 * torch.randn_like(final_torques)  # REDUCED noise
+            final_torques = torch.nan_to_num(final_torques, nan=0.0, posinf=0.0, neginf=0.0)
         
         # **SAFETY CHECKS** (like original biological NCAP)
         if torch.isnan(final_torques).any():
