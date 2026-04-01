@@ -18,6 +18,21 @@ This package narrows the scope to the questions the paper needs to answer:
 2. What changes when those cues are removed?
 3. What changes when directional mechanics are introduced?
 
+## Current Boundaries
+
+The package now owns its own:
+
+- trainer,
+- vectorized environment wrapper,
+- artifact naming,
+- plotting and video generation,
+- experiment reporting.
+
+It still intentionally reuses:
+
+- the NCAP model definitions under `swimmer/models`,
+- the dm_control swimmer task base used by the local environment.
+
 ## Presets
 
 - `baseline_short`
@@ -60,3 +75,4 @@ python3 micro_publication_main.py --run_matrix
 - Per-run artifacts are isolated under `outputs/micro_publication/runs/<experiment_name>/`.
 - Matrix manifests live under `outputs/micro_publication/`.
 - Matrix comparisons live under `outputs/micro_publication/matrix/`.
+- The package no longer depends on the legacy curriculum trainer for training or reporting.

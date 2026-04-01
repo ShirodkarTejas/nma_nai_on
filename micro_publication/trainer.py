@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""
-Trainer wrapper dedicated to the micro-publication package.
-"""
+"""Parity-first trainer wrapper for the micro-publication package."""
 
 import os
 
-from swimmer.training.curriculum_trainer import CurriculumNCAPTrainer
-from swimmer.utils.artifact_naming import ArtifactNamer
-
+from .legacy_curriculum_trainer import CurriculumNCAPTrainer
+from .legacy_artifact_naming import ArtifactNamer
 from .experiments import build_experiment
 from .metrics import build_experiment_summary, parse_training_summary
 from .reporting import ensure_dir, make_experiment_report, write_json
@@ -15,9 +12,7 @@ from .environment import TonicMicroPublicationWrapper
 
 
 class ExperimentArtifactNamer(ArtifactNamer):
-    """
-    Redirect inherited trainer artifacts into the micro-publication run folder.
-    """
+    """Redirect legacy-style artifacts into the micro-publication run folder."""
 
     def __init__(self, experiment_name: str, run_root: str, model_type: str, n_links: int, algorithm: str = "ppo", additional_config=None):
         super().__init__(model_type, n_links, algorithm, additional_config)
@@ -136,11 +131,9 @@ class MicroPublicationTrainer(CurriculumNCAPTrainer):
     def create_model(self):
         model = super().create_model()
         actual_model = model.module if hasattr(model, "module") else model
-        with_goal_sensitivity = hasattr(actual_model, "goal_sensitivity")
-        with_goal_persistence = hasattr(actual_model, "goal_persistence")
-        if with_goal_sensitivity:
+        if hasattr(actual_model, "goal_sensitivity"):
             actual_model.goal_sensitivity.data.fill_(self.experiment.training.goal_sensitivity_override)
-        if with_goal_persistence:
+        if hasattr(actual_model, "goal_persistence"):
             actual_model.goal_persistence.data.fill_(self.experiment.training.goal_persistence_override)
         return model
 
@@ -169,8 +162,8 @@ class MicroPublicationTrainer(CurriculumNCAPTrainer):
             config=self.experiment.to_dict(),
             summary=summary,
             runtime_notes=[
-                "This package is a clean micro-publication path separated from the legacy curriculum code.",
-                "The full anisotropic mode is implemented as a per-segment directional drag model in the new environment package.",
+                "This package is a parity-focused local wrapper around vendored curriculum trainer utilities.",
+                "The anisotropic mode is still a rigid-link directional drag formulation, not a soft-body mechanics model.",
             ],
         )
         return {
