@@ -9,18 +9,18 @@
 
 ## Summary
 - Mean phase distance: `0.0164`
-- Mean phase reward: `84.8012`
+- Mean phase reward: `86.1993`
 - Mixed-phase success rate: `1.00`
-- Mixed-phase mean transitions: `7.00`
+- Mixed-phase mean transitions: `2.33`
 
 ## Phase Metrics
 | Phase | Success | Transitions | Water | Land | Land Fraction | Mean Reward | Mean Distance |
 |---|---|---:|---:|---:|---:|---:|---:|
-| Pure Swimming | `pass` | 0 | 1500 | 0 | 0.00 | 134.08 | 0.066 |
-| Single Land Zone | `pass` | 8 | 1041 | 959 | 0.48 | 86.52 | 0.000 |
-| Two Land Zones | `pass` | 8 | 1588 | 912 | 0.36 | 38.86 | 0.000 |
-| Full Complexity | `pass` | 5 | 2819 | 181 | 0.06 | 79.75 | 0.000 |
+| Pure Swimming | `pass` | 0 | 1500 | 0 | 0.00 | 133.62 | 0.066 |
+| Single Land Zone | `pass` | 2 | 1662 | 338 | 0.17 | 55.51 | 0.000 |
+| Two Land Zones | `pass` | 1 | 1900 | 600 | 0.24 | 117.60 | 0.000 |
+| Full Complexity | `pass` | 4 | 2400 | 600 | 0.20 | 38.06 | 0.000 |
 
 ## Runtime Notes
-- This package is a clean micro-publication path separated from the legacy curriculum code.
-- The full anisotropic mode is implemented as a per-segment directional drag model in the new environment package.
+- This package is a parity-focused local wrapper around vendored curriculum trainer utilities.
+- The anisotropic mode is still a rigid-link directional drag formulation, not a soft-body mechanics model.

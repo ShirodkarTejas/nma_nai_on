@@ -2,18 +2,18 @@
 
 | Experiment | Mean Phase Distance | Mean Phase Reward | Mixed Success | Mean Transitions | Notes |
 |---|---:|---:|---:|---:|---|
-| `baseline_short` | 0.0164 | 109.1289 | 0.67 | 3.67 | Privileged substrate cues on, isotropic medium switching. |
-| `cue_ablation_short` | 0.0164 | 84.8012 | 1.00 | 7.00 | Privileged environment and viscosity cues hidden. |
-| `anisotropy_proxy_short` | 0.0164 | 91.8399 | 0.67 | 1.00 | Directional drag proxy on land. |
-| `anisotropy_full_short` | 0.0164 | 88.0587 | 1.00 | 3.33 | Full per-segment directional drag in both media. |
+| `baseline_short` | 0.0164 | 100.6187 | 0.67 | 4.00 | Privileged substrate cues on, isotropic medium switching. |
+| `cue_ablation_short` | 0.0164 | 86.1993 | 1.00 | 2.33 | Privileged environment and viscosity cues hidden. |
+| `anisotropy_proxy_short` | 0.0164 | 108.0762 | 1.00 | 2.67 | Directional drag proxy on land. |
+| `anisotropy_full_short` | 0.0164 | 96.4337 | 1.00 | 2.67 | Full per-segment directional drag in both media. |
 
 ## Phase Comparison
 | Experiment | P1 | P2 | P3 |
 |---|---|---|---|
-| `baseline_short` | fail / t=0 / land=0.00 | pass / t=2 / land=0.24 | pass / t=9 / land=0.40 |
-| `cue_ablation_short` | pass / t=8 / land=0.48 | pass / t=8 / land=0.36 | pass / t=5 / land=0.06 |
-| `anisotropy_proxy_short` | fail / t=0 / land=0.00 | pass / t=2 / land=0.24 | pass / t=1 / land=0.29 |
-| `anisotropy_full_short` | pass / t=3 / land=0.44 | pass / t=4 / land=0.06 | pass / t=3 / land=0.40 |
+| `baseline_short` | pass / t=2 / land=0.30 | fail / t=0 / land=0.00 | pass / t=10 / land=0.17 |
+| `cue_ablation_short` | pass / t=2 / land=0.17 | pass / t=1 / land=0.24 | pass / t=4 / land=0.20 |
+| `anisotropy_proxy_short` | pass / t=5 / land=0.41 | pass / t=1 / land=0.28 | pass / t=2 / land=0.20 |
+| `anisotropy_full_short` | pass / t=2 / land=0.30 | pass / t=1 / land=0.24 | pass / t=5 / land=0.41 |
 
 ## Run Folders
 - `baseline_short`: `outputs/micro_publication/runs/baseline_short`

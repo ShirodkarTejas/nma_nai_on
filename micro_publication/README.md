@@ -22,11 +22,10 @@ This package narrows the scope to the questions the paper needs to answer:
 
 The package now owns its own:
 
-- trainer,
-- vectorized environment wrapper,
-- artifact naming,
-- plotting and video generation,
-- experiment reporting.
+- experiment configuration,
+- environment/task definition,
+- vendored legacy trainer-side utilities for parity,
+- output redirection and reporting.
 
 It still intentionally reuses:
 
@@ -75,4 +74,4 @@ python3 micro_publication_main.py --run_matrix
 - Per-run artifacts are isolated under `outputs/micro_publication/runs/<experiment_name>/`.
 - Matrix manifests live under `outputs/micro_publication/`.
 - Matrix comparisons live under `outputs/micro_publication/matrix/`.
-- The package no longer depends on the legacy curriculum trainer for training or reporting.
+- The package now vendors the legacy trainer-side utilities locally to preserve behavior while keeping outputs isolated under `micro_publication`.
