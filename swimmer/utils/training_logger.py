@@ -97,23 +97,24 @@ class TrainingLogger:
         if max_velocity is not None:
             self.log_metric('max_velocity', max_velocity)
     
-    def log_training_step(self, data_dict=None, loss=None, policy_loss=None, value_loss=None, 
+    def log_training_step(self, data_dict=None, loss=None, policy_loss=None, value_loss=None,
                          entropy=None, learning_rate=None):
         """Log training step metrics - accepts either dict or individual parameters."""
-        # **FIXED**: Handle dictionary input from curriculum trainer
         if data_dict is not None:
             # Extract episode-level data
             if 'episode' in data_dict:
                 self.current_episode = max(self.current_episode, data_dict['episode'])
             if 'step' in data_dict:
                 self.current_step = max(self.current_step, data_dict['step'])
-            
-            # Log episode reward and distance if present
-            if 'reward' in data_dict:
-                self.log_metric('episode_reward', data_dict['reward'])
-            if 'distance' in data_dict:
-                self.log_metric('episode_distance', data_dict['distance'])
-            
+
+            # Support both 'reward'/'distance' and 'episode_reward'/'episode_distance' key variants
+            reward   = data_dict.get('episode_reward',   data_dict.get('reward'))
+            distance = data_dict.get('episode_distance', data_dict.get('distance'))
+            if reward is not None:
+                self.log_metric('episode_reward', reward)
+            if distance is not None:
+                self.log_metric('episode_distance', distance)
+
             # Log other metrics
             if 'mean_reward_10' in data_dict:
                 self.log_metric('mean_reward_10', data_dict['mean_reward_10'])
@@ -123,6 +124,20 @@ class TrainingLogger:
                 self.log_metric('phase', data_dict['phase'])
             if 'progress' in data_dict:
                 self.log_metric('progress', data_dict['progress'])
+            if 'neuromod_variance' in data_dict:
+                self.log_metric('neuromod_variance', data_dict['neuromod_variance'])
+
+            # Populate episode_data so episodes.json contains useful records
+            if reward is not None and distance is not None:
+                self.episode_data.append({
+                    'episode':           data_dict.get('episode', self.current_episode),
+                    'step':              data_dict.get('step',    self.current_step),
+                    'reward':            float(reward),
+                    'distance':          float(distance),
+                    'phase':             data_dict.get('phase'),
+                    'neuromod_variance': data_dict.get('neuromod_variance'),
+                    'timestamp':         time.time(),
+                })
         
         # Handle individual parameters (original functionality)
         if loss is not None:

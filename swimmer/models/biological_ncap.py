@@ -37,15 +37,29 @@ def graded(x):
 class BiologicalNCAPSwimmer(nn.Module):
     """
     Biologically Authentic NCAP Swimmer Implementation
-    
-    Key improvements over complex NCAP:
-    - NO LSTM memory system (biologically implausible)
-    - Direct parameter modulation (like neuromodulation)
-    - Environment-sensitive oscillator periods
-    - Viscosity-based amplitude scaling
-    - All adaptations through core biological parameters
+
+    Core biological circuit (no LSTM):
+    - Head CPG oscillators drive alternating dorsal/ventral activation
+    - B-neurons receive proprioceptive feedback from the previous joint
+    - Antagonistic muscle pairs (dorsal/ventral) produce net joint torque
+    - All weights are sign-constrained (excitatory ≥ 0, inhibitory ≤ 0)
+    - `graded()` clamps activations to [0, 1] matching biological saturation
+
+    Connectome-prior support (call `configure_sparse_priors()` after construction):
+    - `_sparse_prior_scalars`: dict of syn_* and dist_* values from Cook 2019
+    - `compute_topological_prior_loss(lambda_val)`: λ × Σ dist_p × ||w_p||²
     """
-    
+
+    # Maps pathway name → (param_name_prefixes_excitatory, param_name_prefixes_inhibitory)
+    _PATHWAY_PARAM_MAP = {
+        "ipsi_db":    (("muscle_d_d_", "muscle_ipsi"),    ()),
+        "ipsi_vb":    (("muscle_v_v_", "muscle_ipsi"),    ()),
+        "contra_db":  ((),  ("muscle_v_d_", "muscle_contra")),
+        "contra_vb":  ((),  ("muscle_d_v_", "muscle_contra")),
+        "next_db":    (("bneuron_d_prop_", "bneuron_prop"), ()),
+        "next_vb":    (("bneuron_v_prop_", "bneuron_prop"), ()),
+    }
+
     def __init__(self, n_joints, oscillator_period=60,
                  use_weight_sharing=True, use_weight_constraints=True,
                  include_proprioception=True, include_head_oscillators=True,
@@ -119,11 +133,75 @@ class BiologicalNCAPSwimmer(nn.Module):
             
             print(f"✅ Added biological environment adaptation (no LSTM)")
         
+        # Connectome sparse-prior storage (populated by configure_sparse_priors())
+        self._sparse_prior_scalars: dict = {}
+
         # Move to device
         self.to(self._device)
         if self._device.type == 'cuda':
             print(f"Biological NCAP model on GPU: {next(self.parameters()).device}")
-    
+
+    # ------------------------------------------------------------------
+    # Connectome-prior API
+    # ------------------------------------------------------------------
+
+    def configure_sparse_priors(self, scalars: dict) -> None:
+        """Store Cook-2019-derived prior scalars on the model.
+
+        Args:
+            scalars: dict with keys ``syn_{pathway}`` and ``dist_{pathway}``
+                     for each of the six pathways (ipsi_db, ipsi_vb, contra_db,
+                     contra_vb, next_db, next_vb).  Produced by
+                     ``generate_ncap_segment_priors()``.
+        """
+        self._sparse_prior_scalars = {k: float(v) for k, v in scalars.items()}
+
+    def _iter_pathway_params(self, pathway: str):
+        """Yield parameters that belong to *pathway*."""
+        if not hasattr(self, "params"):
+            return
+        exc_prefixes, inh_prefixes = self._PATHWAY_PARAM_MAP.get(pathway, ((), ()))
+        for name, param in self.params.items():
+            for prefix in exc_prefixes:
+                if name.startswith(prefix) or name == prefix:
+                    yield param
+                    break
+            else:
+                for prefix in inh_prefixes:
+                    if name.startswith(prefix) or name == prefix:
+                        yield param
+                        break
+
+    def compute_topological_prior_loss(self, lambda_val: float) -> torch.Tensor:
+        """Topological L2 regularisation loss.
+
+        For each of the six Cook-2019 pathways computes:
+
+            loss += lambda_val × dist_pathway × Σ(w²)
+
+        where *dist_pathway* is the mean anatomical distance (normalised to
+        [0, 1]) between the pre- and post-synaptic neurons.  Long-range
+        connections are penalised proportionally more.
+
+        Returns a scalar tensor (0.0 when lambda_val ≤ 0 or no priors loaded).
+        """
+        device = next(self.parameters()).device
+        zero = torch.zeros((), device=device, dtype=torch.float32)
+        if lambda_val <= 0.0 or not self._sparse_prior_scalars:
+            return zero
+
+        total = zero.clone()
+        for pathway in self._PATHWAY_PARAM_MAP:
+            dist = float(self._sparse_prior_scalars.get(f"dist_{pathway}", 1.0))
+            terms = [
+                (p ** 2).sum()
+                for p in self._iter_pathway_params(pathway)
+            ]
+            if terms:
+                total = total + dist * torch.stack(terms).sum()
+
+        return lambda_val * total
+
     def reset(self):
         """Reset timestep."""
         self.timestep = 0

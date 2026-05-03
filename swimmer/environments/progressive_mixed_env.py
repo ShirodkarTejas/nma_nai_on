@@ -771,12 +771,38 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
     def get_reward(self, physics):
         """Enhanced reward with goal-directed navigation - FIXED to encourage land zone usage."""
         head_pos = physics.named.data.xpos['head'][:2]
-        forward_velocity = -physics.named.data.sensordata['head_vel'][1]
-        
-        # **LAND AVOIDANCE FIX: Completely eliminate all movement penalties**
+        head_vel = physics.named.data.sensordata['head_vel'][:2]
+
+        # Phase 1: dense velocity-toward-target swimming reward.
+        # Previously base_reward=0.0 here, which gave near-zero learning signal
+        # because the 500-point jackpot target is 1.5m away and rarely reached by
+        # an untrained agent. The time penalty then dominated, making rewards
+        # consistently negative and gradient near-zero.
         if self._training_progress < 0.3:
-            # Phase 1: Only reward target approach, NO base swimming reward
-            base_reward = 0.0  # Pure navigation focus
+            # Compute velocity projected onto the direction of the current target
+            if self._current_targets:
+                tgt_idx = min(self._current_target_index, len(self._current_targets) - 1)
+                target_pos = np.array(self._current_targets[tgt_idx]['position'], dtype=np.float64)
+                target_vec = target_pos - head_pos
+                dist = np.linalg.norm(target_vec)
+                if dist > 1e-6:
+                    target_dir = target_vec / dist
+                    vel_toward = float(np.dot(head_vel, target_dir))
+                else:
+                    vel_toward = 0.0
+            else:
+                vel_toward = float(head_vel[0])
+
+            # Shaped swimming reward: tolerance + bonus for sustained forward motion
+            base_reward = rewards.tolerance(
+                vel_toward,
+                bounds=(0.05, float('inf')),
+                margin=0.1,
+                value_at_margin=0.,
+                sigmoid='linear',
+            ) * 4.0
+            if vel_toward > 0.05:
+                base_reward += 2.0 * vel_toward
         else:
             # Phase 2+: Mixed environment reward - ENCOURAGE both environments
             # Determine current environment
@@ -822,8 +848,9 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 self._last_on_land = False
         
         # Time penalty: every step costs points, forcing the agent to reach targets quickly.
-        # This eliminates any passive reward accumulation from surviving the episode.
-        time_penalty = -0.01
+        # Reduced from -0.01 to -0.003: the old value dominated Phase 1 rewards
+        # (-10/episode vs ~1-2 navigation reward), masking any learning signal.
+        time_penalty = -0.003
         
         # **FIX: Add environment diversity bonus**
         environment_diversity_bonus = 0.0

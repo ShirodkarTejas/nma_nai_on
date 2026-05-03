@@ -64,6 +64,9 @@ class RelaxationOscillator(nn.Module):
         Returns:
             tuple: (dorsal_activity, ventral_activity) in [0, 1] range
         """
+        def to_scalar(x):
+            return x.detach().item() if isinstance(x, torch.Tensor) else float(x)
+
         # Apply environmental frequency scaling (dramatic changes like real C. elegans)
         effective_period = self.base_period / environment_factor
         
@@ -83,7 +86,7 @@ class RelaxationOscillator(nn.Module):
             self.dorsal_activity = min(1.0, phase_progress * target_dorsal)
             
             # Rapid fall for ventral
-            self.ventral_activity = max(0.0, self.ventral_activity - self.ventral_fall_rate)
+            self.ventral_activity = max(0.0, to_scalar(self.ventral_activity) - to_scalar(self.ventral_fall_rate))
             
         else:
             # Ventral phase (faster rise)
@@ -94,21 +97,21 @@ class RelaxationOscillator(nn.Module):
             self.ventral_activity = min(1.0, phase_progress * target_ventral)
             
             # Rapid fall for dorsal
-            self.dorsal_activity = max(0.0, self.dorsal_activity - self.dorsal_fall_rate)
+            self.dorsal_activity = max(0.0, to_scalar(self.dorsal_activity) - to_scalar(self.dorsal_fall_rate))
         
-        # Apply proprioceptive threshold switching (prevents getting stuck) - FIXED: tensor boolean
-        dorsal_threshold_val = float(torch.clamp(self.dorsal_threshold, 0.6, 0.9).item())
-        ventral_threshold_val = float(torch.clamp(self.ventral_threshold, 0.6, 0.9).item())
+        # Apply proprioceptive threshold switching (prevents getting stuck)
+        dorsal_threshold_val = float(torch.clamp(self.dorsal_threshold, 0.6, 0.9).detach().item())
+        ventral_threshold_val = float(torch.clamp(self.ventral_threshold, 0.6, 0.9).detach().item())
+
+        if to_scalar(self.dorsal_activity) > dorsal_threshold_val:
+            self.ventral_activity = min(1.0, to_scalar(self.ventral_activity) + 0.05)
         
-        if float(self.dorsal_activity) > dorsal_threshold_val:
-            self.ventral_activity = min(1.0, self.ventral_activity + 0.05)  # REDUCED from 0.1
-        
-        if float(self.ventral_activity) > ventral_threshold_val:
-            self.dorsal_activity = min(1.0, self.dorsal_activity + 0.05)  # REDUCED from 0.1
+        if to_scalar(self.ventral_activity) > ventral_threshold_val:
+            self.dorsal_activity = min(1.0, to_scalar(self.dorsal_activity) + 0.05)
         
         # Convert to tensor with proper device handling
-        dorsal_tensor = torch.tensor(float(self.dorsal_activity), dtype=torch.float32)
-        ventral_tensor = torch.tensor(float(self.ventral_activity), dtype=torch.float32)
+        dorsal_tensor = torch.tensor(to_scalar(self.dorsal_activity), dtype=torch.float32)
+        ventral_tensor = torch.tensor(to_scalar(self.ventral_activity), dtype=torch.float32)
         
         return torch.clamp(dorsal_tensor, 0, 1), torch.clamp(ventral_tensor, 0, 1)
 
@@ -117,13 +120,21 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
     Enhanced Biological NCAP with relaxation oscillators and goal-directed navigation.
     
     Improvements over basic NCAP:
-    1. Asymmetric relaxation oscillators (70/30 phase split)
-    2. Goal-directed sensory input integration  
-    3. Dramatic frequency adaptation (3-5x changes)
-    4. Proprioceptive threshold switching
-    5. Target-seeking behavior
-    6. **NEW**: Locomotion-only mode for interference-free training
+    1. Asymmetric relaxation oscillators (60/40 phase split per eLife 2021)
+    2. Traveling-wave phase delays across posterior joints (anti-tail-chasing)
+    3. Goal-directed sensory input integration (disabled in locomotion_only_mode)
+    4. Dramatic frequency adaptation (3–5× like real C. elegans)
+    5. Proprioceptive threshold switching
+
+    Connectome-prior support (call ``configure_sparse_priors()`` after construction):
+    - ``_sparse_prior_scalars``: dict of syn_* and dist_* from Cook 2019
+    - ``compute_topological_prior_loss(lambda_val)``: λ × Σ dist_p × ||w_p||²
     """
+
+    # Inherits the same pathway→parameter mapping as BiologicalNCAPSwimmer.
+    from .biological_ncap import BiologicalNCAPSwimmer as _Bio
+    _PATHWAY_PARAM_MAP = _Bio._PATHWAY_PARAM_MAP
+    del _Bio
     
     def __init__(self, n_joints, oscillator_period=60,
                  use_weight_sharing=True, use_weight_constraints=True,
@@ -184,7 +195,7 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
                     self.params[f'bneuron_d_prop_{i}'] = exc_param()
                     self.params[f'bneuron_v_prop_{i}'] = exc_param()
                 
-                if self.include_head_oscillators and i == 0:
+                if self.include_head_oscillators:
                     self.params[f'bneuron_d_osc_{i}'] = exc_param()
                     self.params[f'bneuron_v_osc_{i}'] = exc_param()
                 
@@ -217,11 +228,60 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
         elif self.locomotion_only_mode:
             print(f"🏊 LOCOMOTION-ONLY MODE: Goal-directed navigation DISABLED for pure swimming training")
         
+        # Connectome sparse-prior storage (populated by configure_sparse_priors())
+        self._sparse_prior_scalars: dict = {}
+
         # Move to device
         self.to(self._device)
         if self._device.type == 'cuda':
             print(f"Enhanced Biological NCAP model on GPU: {next(self.parameters()).device}")
-    
+
+    # ------------------------------------------------------------------
+    # Connectome-prior API  (mirrors BiologicalNCAPSwimmer)
+    # ------------------------------------------------------------------
+
+    def configure_sparse_priors(self, scalars: dict) -> None:
+        """Store Cook-2019-derived prior scalars.  See BiologicalNCAPSwimmer."""
+        self._sparse_prior_scalars = {k: float(v) for k, v in scalars.items()}
+
+    def _iter_pathway_params(self, pathway: str):
+        """Yield parameters belonging to *pathway*."""
+        if not hasattr(self, "params"):
+            return
+        exc_prefixes, inh_prefixes = self._PATHWAY_PARAM_MAP.get(pathway, ((), ()))
+        for name, param in self.params.items():
+            for prefix in exc_prefixes:
+                if name.startswith(prefix) or name == prefix:
+                    yield param
+                    break
+            else:
+                for prefix in inh_prefixes:
+                    if name.startswith(prefix) or name == prefix:
+                        yield param
+                        break
+
+    def compute_topological_prior_loss(self, lambda_val: float) -> torch.Tensor:
+        """Topological L2 regularisation: λ × Σ dist_p × ||w_p||².
+
+        See BiologicalNCAPSwimmer.compute_topological_prior_loss for details.
+        """
+        device = next(self.parameters()).device
+        zero = torch.zeros((), device=device, dtype=torch.float32)
+        if lambda_val <= 0.0 or not self._sparse_prior_scalars:
+            return zero
+
+        total = zero.clone()
+        for pathway in self._PATHWAY_PARAM_MAP:
+            dist = float(self._sparse_prior_scalars.get(f"dist_{pathway}", 1.0))
+            terms = [
+                (p ** 2).sum()
+                for p in self._iter_pathway_params(pathway)
+            ]
+            if terms:
+                total = total + dist * torch.stack(terms).sum()
+
+        return lambda_val * total
+
     def reset(self):
         """Reset timestep and oscillator state."""
         self.timestep = 0
@@ -516,9 +576,11 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
         # **NEW**: Apply action scaling for stronger swimming after normalization
         final_torques = final_torques * self.action_scaling_factor
         
-        # Add small exploration noise during training
+        # Exploration noise: 0.1 std is the minimum useful magnitude for REINFORCE
+        # to produce varied trajectories. 0.02 was too small — the policy was near-
+        # deterministic, giving near-zero gradient variance across episodes.
         if self.training:
-            final_torques = final_torques + 0.02 * torch.randn_like(final_torques)  # REDUCED noise
+            final_torques = final_torques + 0.1 * torch.randn_like(final_torques)
         
         # **SAFETY CHECKS** (like original biological NCAP)
         if torch.isnan(final_torques).any():

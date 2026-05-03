@@ -18,7 +18,7 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore", message=".*Box bound precision lowered by casting to.*")
 from ..models.biological_ncap import BiologicalNCAPSwimmer, BiologicalNCAPActor
 from ..models.enhanced_biological_ncap import EnhancedBiologicalNCAPSwimmer
-from ..environments.progressive_mixed_env import TonicProgressiveMixedWrapper
+from ..environments.micro_publication_env import TonicMicroPublicationWrapper
 from ..utils.training_logger import TrainingLogger
 from ..utils.curriculum_visualization import create_curriculum_plots, create_test_video, create_phase_comparison_video, save_training_summary, create_trajectory_analysis
 from ..utils.artifact_naming import ArtifactNamer, detect_model_type
@@ -321,18 +321,22 @@ class CurriculumNCAPTrainer:
         return self.effective_prior_lambda * total
         
     def create_environment(self):
-        """Create progressive mixed environment."""
-        env = TonicProgressiveMixedWrapper(
+        """Create micro-publication mixed environment with clean reward decomposition."""
+        env = TonicMicroPublicationWrapper(
             n_links=self.n_links,
             time_feature=True,
-            desired_speed=0.15
+            desired_speed=0.15,
+            land_start_probability=0.35,
         )
-        
-        print(f"🌊 Created progressive mixed environment")
+        # Step-based curriculum: disable auto episode-count update so trainer
+        # can set training_progress directly as a fraction of training_steps.
+        env.env.manual_progress_override = True
+
+        print(f"🌊 Created micro-publication mixed environment")
         print(f"   Environment: {env.name}")
         print(f"   Observation space: {env.observation_space.shape}")
         print(f"   Action space: {env.action_space.shape}")
-        
+
         return env
     
     def create_model(self):
@@ -358,7 +362,7 @@ class CurriculumNCAPTrainer:
                 include_environment_adaptation=True,  # Dramatic frequency adaptation
                 include_goal_direction=not use_locomotion_only,  # **DISABLED** for early training
                 locomotion_only_mode=use_locomotion_only,  # **NEW**: Pure swimming mode
-                action_scaling_factor=1.8  # **NEW**: Increased scaling for stronger swimming
+                action_scaling_factor=1.8  
             ).to(self.device)
             
             print(f"🚀 Created ENHANCED Biological NCAP model with {sum(p.numel() for p in model.parameters())} parameters")
@@ -385,7 +389,13 @@ class CurriculumNCAPTrainer:
                            f"Supported: 'biological_ncap', 'enhanced_ncap'")
 
         self._apply_sparse_prior_initialization(model)
-        
+
+        # Wire the prior scalars onto the model so its own
+        # compute_topological_prior_loss() method can be called directly
+        # (e.g. by custom_tonic_agent if this model is ever used in that path).
+        if hasattr(model, "configure_sparse_priors"):
+            model.configure_sparse_priors(self.sparse_prior_scalars)
+
         return model
     
     def create_agent(self, model, env):
@@ -397,8 +407,15 @@ class CurriculumNCAPTrainer:
             def __init__(self, ncap_model, environment):
                 self.ncap_model = ncap_model
                 self.step_count = 0
-                self.use_stable_init = False  # **FIXED**: Allow full action range for speed development
-                
+                self.use_stable_init = False
+
+                # Precompute observation layout offsets from n_links.
+                # Layout: [joints(n_j), body_vel(n_links*3+3), env(5), goal(7), time(1)]
+                _n_links = trainer_ref.n_links
+                self._n_joints = _n_links - 1
+                self._env_features_start = self._n_joints + (_n_links * 3 + 3)
+                self._goal_features_start = self._env_features_start + 5
+
                 # Initialize RL training components
                 learning_rate = trainer_ref.learning_rate
                 self.optimizer = torch.optim.Adam(ncap_model.parameters(), lr=learning_rate)
@@ -406,19 +423,18 @@ class CurriculumNCAPTrainer:
                 self.training_enabled = True
                 
             def step(self, obs):
-                """Training step - returns action AND updates model."""
+                """Training step - returns action and buffers (obs, action)."""
                 action = self.test_step(obs)
-                
-                # Store experience for training (if training enabled)
-                if self.training_enabled and len(self.episode_buffer['obs']) > 0:
-                    # Store previous transition
+                # Store every (obs, action) so it aligns 1-to-1 with rewards
+                # added via add_reward().  Removing the len>0 guard fixes the
+                # off-by-one that caused obs[i] to be paired with reward[i-1].
+                if self.training_enabled:
                     self.episode_buffer['obs'].append(obs)
                     self.episode_buffer['actions'].append(action)
-                
                 return action
-            
+
             def add_reward(self, reward):
-                """Add reward for the last action."""
+                """Add reward for the action taken in the current step."""
                 if self.training_enabled:
                     self.episode_buffer['rewards'].append(reward)
             
@@ -488,6 +504,7 @@ class CurriculumNCAPTrainer:
                             continue
                         
                         predicted_actions = torch.stack(predicted_actions)
+                        batch_actions =  np.array(batch_actions, dtype=np.float32)
                         actual_actions = torch.FloatTensor(batch_actions).to(device)
                         
                         # Policy gradient loss
@@ -518,29 +535,32 @@ class CurriculumNCAPTrainer:
             def _get_model_action(self, obs):
                 """Get action from NCAP model as tensor for training."""
                 device = next(self.ncap_model.parameters()).device
-                
+
                 if not isinstance(obs, torch.Tensor):
                     obs = torch.tensor(obs, dtype=torch.float32, device=device)
                 elif obs.device != device:
                     obs = obs.to(device)
-                
-                # Extract joint positions and other inputs (same logic as test_step)
-                joint_pos = obs[:4] if len(obs) >= 4 else torch.zeros(4, device=device)
-                
-                # Environment adaptation
+
+                # Joint positions
+                nj = self._n_joints
+                joint_pos = obs[:nj] if len(obs) >= nj else torch.zeros(nj, device=device)
+
+                # Environment type: [water_flag, land_flag, viscosity_norm]
                 environment_type = None
-                if len(obs) >= 9:
-                    water_flag = obs[8:9]
-                    land_flag = 1.0 - water_flag
-                    viscosity_norm = torch.zeros_like(water_flag) + 0.1
-                    environment_type = torch.cat([water_flag, land_flag, viscosity_norm])
-                
-                # Goal direction (for enhanced NCAP)
+                ef_start = self._env_features_start
+                if len(obs) >= ef_start + 3:
+                    water_flag = obs[ef_start + 1:ef_start + 2]
+                    land_flag  = obs[ef_start + 2:ef_start + 3]
+                    vis_norm   = obs[ef_start:ef_start + 1]
+                    environment_type = torch.cat([water_flag, land_flag, vis_norm])
+
+                # Goal direction: target_direction at goal_features_start + 1 .. +3
                 target_direction = None
-                if len(obs) >= 32 and hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
-                    target_x, target_y = obs[-4:-3], obs[-3:-2]
-                    swimmer_x, swimmer_y = obs[-2:-1], obs[-1:]
-                    target_direction = torch.cat([target_x - swimmer_x, target_y - swimmer_y])
+                gf_start = self._goal_features_start
+                if (len(obs) >= gf_start + 3
+                        and hasattr(self.ncap_model, 'include_goal_direction')
+                        and self.ncap_model.include_goal_direction):
+                    target_direction = obs[gf_start + 1:gf_start + 3]
                 
                 # Keep the action path differentiable for policy updates.
                 if hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
@@ -589,9 +609,23 @@ class CurriculumNCAPTrainer:
                             if target_norm > 0.1:  # Valid target
                                 target_direction = target_pos / target_norm
                 else:
-                    joint_pos = torch.tensor(obs[:4], dtype=torch.float32, device=device)
+                    nj = self._n_joints
+                    joint_pos = torch.tensor(obs[:nj], dtype=torch.float32, device=device)
+
                     environment_type = None
+                    ef_start = self._env_features_start
+                    if len(obs) >= ef_start + 3:
+                        water_flag = float(obs[ef_start + 1])
+                        land_flag  = float(obs[ef_start + 2])
+                        vis_norm   = float(obs[ef_start])
+                        environment_type = np.array([water_flag, land_flag, vis_norm], dtype=np.float32)
+
                     target_direction = None
+                    gf_start = self._goal_features_start
+                    if (len(obs) >= gf_start + 3
+                            and hasattr(self.ncap_model, 'include_goal_direction')
+                            and self.ncap_model.include_goal_direction):
+                        target_direction = obs[gf_start + 1:gf_start + 3].copy()
                 
                 # Get NCAP action with biological adaptation and goal-directed navigation
                 with torch.no_grad():
@@ -774,6 +808,19 @@ class CurriculumNCAPTrainer:
         """Apply biological constraints to maintain realism."""
         constraints_applied = []
 
+        # When sparse_init is active, use lower floor/ceiling so Cook-2019-derived
+        # weights (some as small as 0.05 for low-synapse pathways) are not immediately
+        # overridden at step 25 k before the optimizer can move them.  Without this,
+        # sparse init has no lasting effect on experiments 03/04.
+        if self.sparse_init:
+            muscle_exc_min  = 0.1
+            muscle_inh_max  = -0.1
+            coupling_min    = 0.2
+        else:
+            muscle_exc_min  = 0.5
+            muscle_inh_max  = -0.5
+            coupling_min    = self.min_coupling_strength
+
         with torch.no_grad():
             for name, param in model.params.items():
                 # Oscillator strength minimum — matches global 'bneuron_osc' and
@@ -787,26 +834,26 @@ class CurriculumNCAPTrainer:
                 # Coupling strength minimum — matches global 'bneuron_prop' and
                 # segment-specific 'bneuron_d_prop_N' / 'bneuron_v_prop_N'
                 elif 'bneuron_d_prop' in name or 'bneuron_v_prop' in name or name == 'bneuron_prop':
-                    if param.item() < self.min_coupling_strength:
+                    if param.item() < coupling_min:
                         old_val = param.item()
-                        param.data.fill_(self.min_coupling_strength)
-                        constraints_applied.append(f"{name} {old_val:.3f} → {self.min_coupling_strength}")
+                        param.data.fill_(coupling_min)
+                        constraints_applied.append(f"{name} {old_val:.3f} → {coupling_min}")
 
-                # **RELAXED**: Ipsilateral muscle minimum — matches global 'muscle_ipsi'
+                # Ipsilateral muscle minimum — matches global 'muscle_ipsi'
                 # and segment-specific 'muscle_d_d_N' / 'muscle_v_v_N'
                 elif name == 'muscle_ipsi' or name.startswith('muscle_d_d_') or name.startswith('muscle_v_v_'):
-                    if param.item() < 0.5:  # **REDUCED** from 0.8 to 0.5
+                    if param.item() < muscle_exc_min:
                         old_val = param.item()
-                        param.data.fill_(0.5)
-                        constraints_applied.append(f"{name} {old_val:.3f} → 0.5")
+                        param.data.fill_(muscle_exc_min)
+                        constraints_applied.append(f"{name} {old_val:.3f} → {muscle_exc_min}")
 
-                # **RELAXED**: Contralateral muscle maximum — matches global 'muscle_contra'
+                # Contralateral muscle maximum — matches global 'muscle_contra'
                 # and segment-specific 'muscle_d_v_N' / 'muscle_v_d_N'
                 elif name == 'muscle_contra' or name.startswith('muscle_d_v_') or name.startswith('muscle_v_d_'):
-                    if param.item() > -0.5:  # **REDUCED** from -0.8 to -0.5
+                    if param.item() > muscle_inh_max:
                         old_val = param.item()
-                        param.data.fill_(-0.5)
-                        constraints_applied.append(f"{name} {old_val:.3f} → -0.5")
+                        param.data.fill_(muscle_inh_max)
+                        constraints_applied.append(f"{name} {old_val:.3f} → {muscle_inh_max}")
         
         if constraints_applied:
             print(f"🧬 Applied biological constraints: {', '.join(constraints_applied)}")
@@ -843,23 +890,22 @@ class CurriculumNCAPTrainer:
             rewards = []
             
             for episode in range(num_episodes):
-                # Set environment to specific phase
+                # Set environment to specific phase (property handles recreation)
                 env.env.training_progress = temp_progress
-                env.env._create_environment()
-                
+
                 obs = env.reset()
                 episode_reward = 0
-                initial_pos = env.env.physics.named.data.xpos['head'][:2].copy()
-                
-                for _ in range(steps_per_episode):  # Data-driven steps per episode
+                initial_pos = env.head_position.copy()
+
+                for _ in range(steps_per_episode):
                     action = agent.test_step(obs)
                     obs, reward, done, _ = env.step(action)
                     episode_reward += reward
-                    
+
                     if done:
                         break
-                
-                final_pos = env.env.physics.named.data.xpos['head'][:2].copy()
+
+                final_pos = env.head_position.copy()
                 distance = np.linalg.norm(final_pos - initial_pos)
                 
                 distances.append(distance)
@@ -967,41 +1013,57 @@ class CurriculumNCAPTrainer:
 
                 last_phase = current_phase
             
-            # Apply biological constraints periodically
-            if self.current_step % self.biological_constraint_frequency == 0:
+            # Apply biological constraints periodically.
+            # Skip step 0 so that connectome-based sparse initialisation is not
+            # immediately overridden by the minimum-value clamps.
+            if (self.current_step > 0
+                    and self.current_step % self.biological_constraint_frequency == 0):
                 self.apply_biological_constraints(model)
             
-            # Training step
+            # Training step — update curriculum progress each episode
+            env.env.training_progress = progress
             obs = env.reset()
             episode_reward = 0
             episode_steps = 0
-            initial_pos = env.env.physics.named.data.xpos['head'][:2].copy()
+            initial_pos = env.head_position.copy()
             
             # Run episode
             episode_start_step = self.current_step
+            env_type_samples = []  # Track environment-type signal for neuromodulation diagnostics
             for _ in range(1000):  # Max episode length
                 action = agent.step(obs)
                 obs, reward, done, _ = env.step(action)
-                
+
+                # Track neuromodulation signal: land_flag is at env_features_start + 2
+                _ef = agent._env_features_start
+                if len(obs) > _ef + 2:
+                    env_type_samples.append(float(obs[_ef + 2]))
+
                 # CRITICAL: Add reward to agent for training (was missing!)
                 agent.add_reward(reward)
-                
+
                 episode_reward += reward
                 episode_steps += 1
                 self.current_step += 1
-                
+
                 if done or self.current_step >= self.training_steps:
                     break
-            
+
             # CRITICAL: Train on episode experience (was missing!)
             agent.end_episode()
+
+            # Neuromodulation diagnostic: log variance of land_flag across episode.
+            # Near-zero variance in Phase 0 is expected (always water). Non-zero in
+            # Phase 2+ means the agent is actually triggering environment transitions
+            # and the frequency-adaptation pathway is receiving varied input.
+            neuromod_variance = float(np.var(env_type_samples)) if env_type_samples else 0.0
             
             # Update progress bar for steps taken this episode
             steps_this_episode = self.current_step - episode_start_step
             main_pbar.update(steps_this_episode)
             
             # Calculate episode distance
-            final_pos = env.env.physics.named.data.xpos['head'][:2].copy()
+            final_pos = env.head_position.copy()
             episode_distance = np.linalg.norm(final_pos - initial_pos)
             
             # Log episode results
@@ -1050,16 +1112,17 @@ class CurriculumNCAPTrainer:
                               f"Distance: {recent_distance:6.3f}m | "
                               f"Steps/s: {steps_per_sec:.1f}{eta_str}")
                 
-                # Log to file
+                # Log to file — keys match plot_ablation.py's _series() expectations
                 self.logger.log_training_step({
                     'step': self.current_step,
                     'episode': self.current_episode,
                     'phase': current_phase,
                     'progress': progress,
-                    'reward': episode_reward,
-                    'distance': episode_distance,
+                    'episode_reward': episode_reward,
+                    'episode_distance': episode_distance,
                     'mean_reward_10': np.mean(recent_rewards),
                     'mean_distance_10': np.mean(recent_distances),
+                    'neuromod_variance': neuromod_variance,
                 })
             
             # Periodic saves and evaluation
