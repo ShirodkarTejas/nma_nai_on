@@ -4,10 +4,14 @@ Tonic Environment Wrapper
 Makes our mixed environment swimmer compatible with Tonic training framework.
 """
 
-import gym
 import numpy as np
-from gym import spaces
-from .mixed_environment import MixedSwimmerEnv
+try:
+    import gymnasium as gym
+    from gymnasium import spaces
+except ImportError:
+    import gym
+    from gym import spaces
+from .mixed_environment import ImprovedMixedSwimmerEnv
 
 class TonicSwimmerWrapper(gym.Env):
     """
@@ -18,7 +22,7 @@ class TonicSwimmerWrapper(gym.Env):
         super().__init__()
         
         # Create the underlying environment
-        self.env = MixedSwimmerEnv(n_links=n_links, speed_factor=speed_factor)
+        self.env = ImprovedMixedSwimmerEnv(n_links=n_links, speed_factor=speed_factor)
         
         # Get action space from environment
         action_spec = self.env.action_spec
@@ -29,9 +33,8 @@ class TonicSwimmerWrapper(gym.Env):
         )
         
         # Create observation space
-        # We'll use joint positions and velocities (each has n_links-1 = n_joints dims)
-        n_joints = n_links - 1
-        obs_dim = n_joints * 2  # positions + velocities
+        # We'll use joint positions and velocities
+        obs_dim = n_links * 2  # positions + velocities
         if time_feature:
             obs_dim += 1  # Add time feature
 

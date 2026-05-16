@@ -10,8 +10,12 @@ from dm_control import suite
 from dm_control.suite import swimmer
 from dm_control.rl import control
 from dm_control.utils import rewards
-import gym
-from gym import spaces
+try:
+    import gymnasium as gym
+    from gymnasium import spaces
+except ImportError:
+    import gym
+    from gym import spaces
 
 _SWIM_SPEED = 0.1
 
@@ -37,17 +41,15 @@ class SimpleSwim(swimmer.Swimmer):
         return obs
 
     def get_reward(self, physics):
-        """Forward swimming reward: amplified velocity signal plus step-level time penalty."""
+        """Simple forward swimming reward."""
         forward_velocity = -physics.named.data.sensordata['head_vel'][1]
-        velocity_reward = 10.0 * rewards.tolerance(
+        return rewards.tolerance(
             forward_velocity,
             bounds=(self._desired_speed, float('inf')),
             margin=self._desired_speed,
             value_at_margin=0.,
             sigmoid='linear',
         )
-        time_penalty = -0.01  # Urgency: penalise every wasted step
-        return velocity_reward + time_penalty
 
 @swimmer.SUITE.add()
 def simple_swim(

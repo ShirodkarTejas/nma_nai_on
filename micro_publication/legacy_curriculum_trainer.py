@@ -4,7 +4,6 @@ Curriculum Trainer for Swimming and Crawling
 Manages progressive training from simple swimming to complex mixed environments.
 """
 
-import random
 import torch
 import torch.nn as nn
 import numpy as np
@@ -16,25 +15,15 @@ from tqdm import tqdm
 
 # Suppress the harmless gym Box precision warning
 warnings.filterwarnings("ignore", message=".*Box bound precision lowered by casting to.*")
-from ..models.biological_ncap import BiologicalNCAPSwimmer, BiologicalNCAPActor
-from ..models.enhanced_biological_ncap import EnhancedBiologicalNCAPSwimmer
-from ..environments.micro_publication_env import TonicMicroPublicationWrapper
-from ..utils.training_logger import TrainingLogger
-from ..utils.curriculum_visualization import create_curriculum_plots, create_test_video, create_phase_comparison_video, save_training_summary, create_trajectory_analysis
-from ..utils.artifact_naming import ArtifactNamer, detect_model_type
+from swimmer.models.biological_ncap import BiologicalNCAPSwimmer, BiologicalNCAPActor
+from swimmer.models.enhanced_biological_ncap import EnhancedBiologicalNCAPSwimmer
+from .environment import TonicMicroPublicationWrapper
+from .legacy_training_logger import TrainingLogger
+from .legacy_visualization import create_curriculum_plots, create_test_video, create_phase_comparison_video, save_training_summary, create_trajectory_analysis
+from .legacy_artifact_naming import ArtifactNamer, detect_model_type
 
-try:
-    from NMAP.connectome_priors.swimmer_priors import generate_ncap_segment_priors, refresh_inventory_files
-except Exception:
-    generate_ncap_segment_priors = None
-    refresh_inventory_files = None
-
-try:
-    from ..utils.advanced_logger import AdvancedTrainingLogger
-    ADVANCED_LOGGING_AVAILABLE = True
-except ImportError:
-    ADVANCED_LOGGING_AVAILABLE = False
-    print("⚠️ Advanced logging not available (missing psutil). Using basic logging.")
+# Force basic logging to avoid background monitoring overhead
+ADVANCED_LOGGING_AVAILABLE = False
 
 
 class CurriculumNCAPTrainer:
@@ -48,23 +37,12 @@ class CurriculumNCAPTrainer:
     - Phase 4 (80-100%): Full mixed environment complexity
     """
     
-    # Single source of truth for curriculum phase names
-    PHASE_NAMES = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
-
     # Phase duration configuration (easily modifiable)
     PHASE_DURATION_CONFIG = {
-        'evaluation_steps': [400, 600, 800, 1200],
-        'video_steps': [800, 1000, 1200, 1500],
-        'trajectory_multiplier': [1.5, 2.0, 2.5, 3.0]
+        'evaluation_steps': [400, 600, 800, 1200],     # **INCREASED** Steps per episode for each phase (was 200,200,200,400)
+        'video_steps': [800, 1000, 1200, 1500],         # **INCREASED** Steps per video for each phase (was 500,500,500,1000)
+        'trajectory_multiplier': [1.5, 2.0, 2.5, 3.0] # **INCREASED** Multiplier for trajectory analysis (was 1.0,1.0,1.0,2.0)
     }
-    _SPARSE_PATHWAYS = (
-        "ipsi_db",
-        "ipsi_vb",
-        "contra_db",
-        "contra_vb",
-        "next_db",
-        "next_vb",
-    )
     
     def __init__(self, 
                  n_links=5,
@@ -72,35 +50,32 @@ class CurriculumNCAPTrainer:
                  training_steps=1000000,
                  save_steps=50000,
                  log_episodes=50,
-                 log_dir='results/manual_run',
                  device='cuda' if torch.cuda.is_available() else 'cpu',
                  oscillator_period=60,
                  min_oscillator_strength=0.8,  # **REDUCED** from 1.2 to 0.8 for speed flexibility
                  min_coupling_strength=0.5,  # **REDUCED** from 0.8 to 0.5 for speed flexibility  
                  biological_constraint_frequency=25000,  # **REDUCED** frequency: every 25k steps
                  resume_from_checkpoint=None,  # Path to checkpoint to resume from
-                 model_type='enhanced_ncap',  # Model type: biological_ncap, enhanced_ncap
+                  model_type='enhanced_ncap',  # Model type: biological_ncap, enhanced_ncap
                  algorithm='ppo',  # Algorithm for naming
+                 num_workers=8,    # NEW: Number of parallel environments
+                 use_multi_gpu=True, # NEW: Use all available GPUs
                  use_locomotion_only_early_training=True,
-                 sparse_init: bool = False,
-                 sparse_reg_lambda: float = 0.0,
-                 force_oscillation: bool = False,
-                 num_workers=8,
-                 use_multi_gpu=True,
                  expose_environment_observation=True,
                  expose_viscosity_observation=True,
                  anisotropic_drag_mode='off',
                  anisotropic_drag_ratio=10.0,
                  anisotropic_drag_gain=0.02,
-                 anisotropic_drag_land_only=True):
+                 anisotropic_drag_land_only=True):  # **NEW**: Use pure locomotion for first 30% of training
         
         self.n_links = n_links
         self.learning_rate = learning_rate
         self.training_steps = training_steps
         self.save_steps = save_steps
         self.log_episodes = log_episodes
-        self.log_dir = os.path.abspath(log_dir)
         self.device = device
+        self.num_workers = num_workers
+        self.use_multi_gpu = use_multi_gpu
         self.oscillator_period = oscillator_period
         self.min_oscillator_strength = min_oscillator_strength
         self.min_coupling_strength = min_coupling_strength
@@ -109,17 +84,6 @@ class CurriculumNCAPTrainer:
         self.model_type = model_type
         self.algorithm = algorithm
         self.use_locomotion_only_early_training = use_locomotion_only_early_training
-        self.force_oscillation = bool(force_oscillation)
-        self.sparse_init = bool(sparse_init)
-        self.sparse_reg_lambda = float(sparse_reg_lambda)
-        self.prior_modulation_scale = 0.15 if self.sparse_init else 0.0
-        self.effective_prior_lambda = self.sparse_reg_lambda
-        # Backward-compatible aliases.
-        self.use_sparse_priors = self.sparse_init
-        self.prior_lambda = self.sparse_reg_lambda
-        self.sparse_prior_scalars = {}
-        self.sparse_prior_metadata = {}
-        self._prepare_sparse_priors()
         self.expose_environment_observation = expose_environment_observation
         self.expose_viscosity_observation = expose_viscosity_observation
         self.anisotropic_drag_mode = anisotropic_drag_mode
@@ -137,14 +101,6 @@ class CurriculumNCAPTrainer:
                 'training_mode': 'curriculum'
             }
         )
-
-        self.curriculum_output_root = os.path.join(self.log_dir, "curriculum_training")
-        self.curriculum_checkpoints_dir = os.path.join(self.curriculum_output_root, "checkpoints")
-        self.curriculum_plots_dir = os.path.join(self.curriculum_output_root, "plots")
-        self.curriculum_videos_dir = os.path.join(self.curriculum_output_root, "videos")
-        self.curriculum_models_dir = os.path.join(self.curriculum_output_root, "models")
-        self.curriculum_summaries_dir = os.path.join(self.curriculum_output_root, "summaries")
-        self.curriculum_logs_dir = os.path.join(self.curriculum_output_root, "logs")
         
         # Training state
         self.current_step = 0
@@ -153,7 +109,7 @@ class CurriculumNCAPTrainer:
         self.phase_distances = {0: [], 1: [], 2: [], 3: []}
         
         # Initialize components with advanced logging if available
-        log_dir = os.path.dirname(self.artifact_namer.training_log_dir(base_dir=self.curriculum_logs_dir))
+        log_dir = os.path.dirname(self.artifact_namer.training_log_dir())
         experiment_name = self.artifact_namer.base_id
         
         if ADVANCED_LOGGING_AVAILABLE:
@@ -180,178 +136,37 @@ class CurriculumNCAPTrainer:
         print(f"     Phase 2 (30-60%): Single land zone")
         print(f"     Phase 3 (60-80%): Two land zones")
         print(f"     Phase 4 (80-100%): Full complexity")
-        if self.sparse_init:
-            print(f"   Sparse init: enabled (modulation={self.prior_modulation_scale:.2f})")
-        else:
-            print("   Sparse init: disabled (tabula rasa initialization)")
-        if self.effective_prior_lambda > 0.0:
-            print(f"   Sparse regularization: enabled (lambda={self.effective_prior_lambda:.4f})")
-        else:
-            print("   Sparse regularization: disabled")
-        if self.force_oscillation:
-            print("   Forced oscillation: enabled (min variance=0.1)")
-        else:
-            print("   Forced oscillation: disabled")
-
-    def _default_sparse_priors(self):
-        return {
-            "dist_ipsi_db": 1.0,
-            "dist_ipsi_vb": 1.0,
-            "dist_contra_db": 1.0,
-            "dist_contra_vb": 1.0,
-            "dist_next_db": 1.0,
-            "dist_next_vb": 1.0,
-            "syn_ipsi_db": 0.0,
-            "syn_ipsi_vb": 0.0,
-            "syn_contra_db": 0.0,
-            "syn_contra_vb": 0.0,
-            "syn_next_db": 0.0,
-            "syn_next_vb": 0.0,
-        }
-
-    def _prepare_sparse_priors(self):
-        if not self.sparse_init and self.effective_prior_lambda <= 0.0:
-            self.sparse_prior_scalars = self._default_sparse_priors()
-            self.sparse_prior_metadata = {"status": "disabled"}
-            return
-
-        priors_fn = generate_ncap_segment_priors
-        if priors_fn is None:
-            self.sparse_init = False
-            self.use_sparse_priors = False
-            self.effective_prior_lambda = 0.0
-            self.prior_modulation_scale = 0.0
-            self.sparse_prior_scalars = self._default_sparse_priors()
-            self.sparse_prior_metadata = {"status": "import_error", "reason": "sparse prior module unavailable"}
-            print("⚠️ Could not import sparse priors. Falling back to tabula rasa curriculum mode.")
-            return
-
-        try:
-            inventory_refresh = {"status": "skipped"}
-            if refresh_inventory_files is not None:
-                try:
-                    inventory_refresh = refresh_inventory_files()
-                    inventory_refresh["status"] = "ok"
-                except Exception as refresh_exc:
-                    inventory_refresh = {"status": "error", "reason": str(refresh_exc)}
-
-            priors = priors_fn(num_segments=max(1, int(self.n_links - 1)))
-            defaults = self._default_sparse_priors()
-            self.sparse_prior_scalars = {
-                key: float(priors.get(key, defaults[key]))
-                for key in defaults
-            }
-            metadata = priors.get("metadata", {}) if isinstance(priors, dict) else {}
-            if isinstance(metadata, dict):
-                metadata["inventory_refresh"] = inventory_refresh
-            self.sparse_prior_metadata = {
-                "status": "ok",
-                "sources": priors.get("sources", {}),
-                "metadata": metadata,
-            }
-        except Exception as exc:
-            self.sparse_init = False
-            self.use_sparse_priors = False
-            self.effective_prior_lambda = 0.0
-            self.prior_modulation_scale = 0.0
-            self.sparse_prior_scalars = self._default_sparse_priors()
-            self.sparse_prior_metadata = {"status": "load_error", "reason": str(exc)}
-            print(f"⚠️ Sparse prior generation failed. Falling back to tabula rasa curriculum mode. ({exc})")
-
-    def _iter_sparse_pathway_params(self, model, pathway: str):
-        if not hasattr(model, "params"):
-            return
-        for name, param in model.params.items():
-            if pathway == "ipsi_db":
-                if name.startswith("muscle_d_d_") or name == "muscle_ipsi":
-                    yield param
-            elif pathway == "ipsi_vb":
-                if name.startswith("muscle_v_v_") or name == "muscle_ipsi":
-                    yield param
-            elif pathway == "contra_db":
-                if name.startswith("muscle_v_d_") or name == "muscle_contra":
-                    yield param
-            elif pathway == "contra_vb":
-                if name.startswith("muscle_d_v_") or name == "muscle_contra":
-                    yield param
-            elif pathway == "next_db":
-                if name.startswith("bneuron_d_prop_") or name == "bneuron_prop":
-                    yield param
-            elif pathway == "next_vb":
-                if name.startswith("bneuron_v_prop_") or name == "bneuron_prop":
-                    yield param
-
-    def _apply_sparse_prior_initialization(self, model):
-        if not self.sparse_init or not hasattr(model, "params"):
-            return
-
-        syn_values = []
-        for pathway in self._SPARSE_PATHWAYS:
-            syn = float(self.sparse_prior_scalars.get(f"syn_{pathway}", 0.0))
-            if np.isfinite(syn) and syn > 0:
-                syn_values.append(syn)
-        syn_scale = max(syn_values) if syn_values else 1.0
-        jitter_fraction = float(max(0.0, min(self.prior_modulation_scale, 0.45)))
-
-        with torch.no_grad():
-            for pathway in self._SPARSE_PATHWAYS:
-                syn = float(self.sparse_prior_scalars.get(f"syn_{pathway}", 0.0))
-                norm_strength = (syn / syn_scale) if syn_scale > 0 else 0.0
-                norm_strength = float(min(max(norm_strength, 0.0), 1.0))
-                base_strength = float(max(0.05, norm_strength))
-                jitter = base_strength * jitter_fraction
-                low = max(0.0, base_strength - jitter)
-                high = min(1.0, base_strength + jitter)
-                if low > high:
-                    low, high = high, low
-
-                inhibitory = pathway.startswith("contra_")
-                for param in self._iter_sparse_pathway_params(model, pathway):
-                    if inhibitory:
-                        param.uniform_(-high, -low)
-                    else:
-                        param.uniform_(low, high)
-
-    def compute_sparse_prior_loss(self, model, device=None):
-        if self.effective_prior_lambda <= 0.0:
-            if device is None:
-                return torch.tensor(0.0)
-            return torch.zeros((), device=device, dtype=torch.float32)
-
-        if not hasattr(model, "params"):
-            if device is None:
-                return torch.tensor(0.0)
-            return torch.zeros((), device=device, dtype=torch.float32)
-
-        if device is None:
-            device = next(model.parameters()).device
-
-        total = torch.zeros((), device=device, dtype=torch.float32)
-        for pathway in self._SPARSE_PATHWAYS:
-            dist = float(self.sparse_prior_scalars.get(f"dist_{pathway}", 1.0))
-            terms = [(p ** 2).sum() for p in self._iter_sparse_pathway_params(model, pathway)]
-            if terms:
-                total = total + dist * torch.stack(terms).sum()
-        return self.effective_prior_lambda * total
         
     def create_environment(self):
-        """Create micro-publication mixed environment with clean reward decomposition."""
+        """Create progressive mixed environment."""
         env = TonicMicroPublicationWrapper(
             n_links=self.n_links,
             time_feature=True,
             desired_speed=0.15,
-            land_start_probability=0.35,
+            observation_config={
+                "expose_environment": self.expose_environment_observation,
+                "expose_viscosity": self.expose_viscosity_observation,
+                "expose_target": True,
+            },
+            anisotropy_config={
+                "mode": self.anisotropic_drag_mode,
+                "drag_ratio": self.anisotropic_drag_ratio,
+                "tangential_gain": self.anisotropic_drag_gain,
+                "normal_gain": self.anisotropic_drag_gain,
+                "quadratic_drag": False,
+                "apply_in_water": not self.anisotropic_drag_land_only,
+                "apply_in_land": True,
+            },
+            reward_config={},
         )
-        # Step-based curriculum: disable auto episode-count update so trainer
-        # can set training_progress directly as a fraction of training_steps.
-        env.env.manual_progress_override = True
-
-        print(f"🌊 Created micro-publication mixed environment")
-        print(f"   Environment: {env.name}")
-        print(f"   Observation space: {env.observation_space.shape}")
-        print(f"   Action space: {env.action_space.shape}")
-
         return env
+    
+    def create_vectorized_environment(self):
+        """Create multiple environments running in parallel."""
+        from .legacy_vectorized_env import SubprocVecEnv
+        print(f"🌊 Creating {self.num_workers} parallel environments...")
+        env_fns = [lambda: self.create_environment() for _ in range(self.num_workers)]
+        return SubprocVecEnv(env_fns)
     
     def create_model(self):
         """Create NCAP model optimized for curriculum learning based on model_type."""
@@ -372,11 +187,10 @@ class CurriculumNCAPTrainer:
             model = EnhancedBiologicalNCAPSwimmer(
                 n_joints=n_joints,
                 oscillator_period=self.oscillator_period,
-                use_weight_sharing=not self.sparse_init,
                 include_environment_adaptation=True,  # Dramatic frequency adaptation
                 include_goal_direction=not use_locomotion_only,  # **DISABLED** for early training
                 locomotion_only_mode=use_locomotion_only,  # **NEW**: Pure swimming mode
-                action_scaling_factor=1.8  
+                action_scaling_factor=1.8  # **NEW**: Increased scaling for stronger swimming
             ).to(self.device)
             
             print(f"🚀 Created ENHANCED Biological NCAP model with {sum(p.numel() for p in model.parameters())} parameters")
@@ -391,7 +205,6 @@ class CurriculumNCAPTrainer:
             model = BiologicalNCAPSwimmer(
                 n_joints=n_joints,
                 oscillator_period=self.oscillator_period,
-                use_weight_sharing=not self.sparse_init,
                 include_environment_adaptation=True  # Enable biological adaptation
             ).to(self.device)
             
@@ -401,79 +214,89 @@ class CurriculumNCAPTrainer:
         else:
             raise ValueError(f"Unsupported model type: {self.model_type}. "
                            f"Supported: 'biological_ncap', 'enhanced_ncap'")
-
-        self._apply_sparse_prior_initialization(model)
-
-        # Wire the prior scalars onto the model so its own
-        # compute_topological_prior_loss() method can be called directly
-        # (e.g. by custom_tonic_agent if this model is ever used in that path).
-        if hasattr(model, "configure_sparse_priors"):
-            model.configure_sparse_priors(self.sparse_prior_scalars)
-
+        
+        # Enable Multi-GPU if requested and available
+        if self.use_multi_gpu and torch.cuda.device_count() > 1:
+            print(f"⚡ Using {torch.cuda.device_count()} GPUs with DataParallel")
+            model = torch.nn.DataParallel(model)
+        
         return model
     
     def create_agent(self, model, env):
         """Create simplified agent for curriculum training."""
-        trainer_ref = self
+        trainer_lr = self.learning_rate
         
         # Create biological NCAP agent wrapper with environment adaptation
         class BiologicalNCAPAgent:
-            def __init__(self, ncap_model, environment):
+            def __init__(self, ncap_model, environment, n_links):
                 self.ncap_model = ncap_model
-                self.step_count = 0
+                self.n_links = n_links
+                self.n_joints = n_links - 1
+                self.step_count = 0  # Global step count for evaluation
                 self.use_stable_init = False
-
-                # Precompute observation layout offsets from n_links.
-                # Layout: [joints(n_j), body_vel(n_links*3+3), env(5), goal(7), time(1)]
-                _n_links = trainer_ref.n_links
-                self._n_joints = _n_links - 1
-                self._env_features_start = self._n_joints + (_n_links * 3 + 3)
-                self._goal_features_start = self._env_features_start + 5
-
+                
                 # Initialize RL training components
-                learning_rate = trainer_ref.learning_rate
-                self.optimizer = torch.optim.Adam(ncap_model.parameters(), lr=learning_rate)
-                self.episode_buffer = {'obs': [], 'actions': [], 'rewards': []}
+                self.optimizer = torch.optim.Adam(ncap_model.parameters(), lr=trainer_lr)
+                self.num_workers = len(environment.remotes) if hasattr(environment, 'remotes') else 1
+                self.episode_buffers = [{'obs': [], 'actions': [], 'rewards': [], 'timesteps': []} for _ in range(self.num_workers)]
                 self.training_enabled = True
+                self.step_counts = np.zeros(self.num_workers, dtype=int)
+                
+                # Precompute offsets for observation processing
+                self.body_vel_size = self.n_links * 3 + 3
+                self.env_features_start = self.n_joints + self.body_vel_size
+                self.goal_features_start = self.env_features_start + 5
                 
             def step(self, obs):
-                """Training step - returns action and buffers (obs, action)."""
-                action = self.test_step(obs)
-                # Store every (obs, action) so it aligns 1-to-1 with rewards
-                # added via add_reward().  Removing the len>0 guard fixes the
-                # off-by-one that caused obs[i] to be paired with reward[i-1].
-                if self.training_enabled:
-                    self.episode_buffer['obs'].append(obs)
-                    self.episode_buffer['actions'].append(action)
-                return action
-
-            def add_reward(self, reward):
-                """Add reward for the action taken in the current step."""
-                if self.training_enabled:
-                    self.episode_buffer['rewards'].append(reward)
-            
-            def end_episode(self):
-                """End episode and train on collected experience."""
-                if not self.training_enabled or len(self.episode_buffer['rewards']) < 5:
-                    self._reset_buffer()
-                    return
+                """Batch training step - returns actions for all workers."""
+                # obs shape: (num_workers, obs_dim)
+                actions = self.test_step(obs)
                 
-                # Simple policy gradient training
-                self._train_on_episode()
-                self._reset_buffer()
+                # Store experience for each worker
+                if self.training_enabled:
+                    for i in range(self.num_workers):
+                        self.episode_buffers[i]['obs'].append(obs[i])
+                        # Store detached action snapshots so replay does not retain autograd graphs.
+                        self.episode_buffers[i]['actions'].append(np.asarray(actions[i], dtype=np.float32).copy())
+                        self.episode_buffers[i]['timesteps'].append(self.step_counts[i])
+                
+                # step_counts increment moved inside test_step for parallelism consistency
+                return actions
             
-            def _train_on_episode(self):
-                """Train model on episode buffer using policy gradient."""
-                if len(self.episode_buffer['rewards']) == 0:
+            def add_rewards(self, rewards):
+                """Add rewards for all workers."""
+                if self.training_enabled:
+                    for i, reward in enumerate(rewards):
+                        self.episode_buffers[i]['rewards'].append(reward)
+            
+            def end_episodes(self, indices=None):
+                """End episodes for specified workers and train."""
+                if not self.training_enabled:
+                    return
+                    
+                if indices is None:
+                    indices = range(self.num_workers)
+                
+                for i in indices:
+                    if len(self.episode_buffers[i]['rewards']) >= 5:
+                        self._train_on_episode(i)
+                    self._reset_buffer(i)
+            
+            def _train_on_episode(self, worker_idx):
+                """Train model on specific worker's episode buffer."""
+                buffer = self.episode_buffers[worker_idx]
+                if len(buffer['rewards']) == 0:
                     return
                 
                 try:
-                    device = next(self.ncap_model.parameters()).device
+                    # Access the actual model if wrapped in DataParallel
+                    actual_model = self.ncap_model.module if isinstance(self.ncap_model, torch.nn.DataParallel) else self.ncap_model
+                    device = next(actual_model.parameters()).device
                     
-                    # Calculate returns (discounted rewards)
+                    # Calculate returns
                     returns = []
                     running_return = 0
-                    for reward in reversed(self.episode_buffer['rewards']):
+                    for reward in reversed(buffer['rewards']):
                         running_return = reward + 0.99 * running_return
                         returns.insert(0, running_return)
                     
@@ -485,57 +308,66 @@ class CurriculumNCAPTrainer:
                     if returns.std() > 1e-6:
                         returns = (returns - returns.mean()) / (returns.std() + 1e-8)
                     
-                    # Convert observations and actions to tensors
+                    # Convert observations, actions, and timesteps to tensors
                     obs_batch = []
                     action_batch = []
+                    timestep_batch = []
                     
-                    for i in range(min(len(self.episode_buffer['obs']), len(self.episode_buffer['actions']))):
-                        obs_batch.append(self.episode_buffer['obs'][i])
-                        action_batch.append(self.episode_buffer['actions'][i])
+                    for i in range(min(len(buffer['obs']), len(buffer['actions']), len(buffer['timesteps']))):
+                        obs_batch.append(buffer['obs'][i])
+                        action_batch.append(buffer['actions'][i])
+                        timestep_batch.append(buffer['timesteps'][i])
                     
                     if len(obs_batch) == 0:
                         return
                     
                     # Train on mini-batches
-                    batch_size = min(32, len(obs_batch))
+                    batch_size = min(64, len(obs_batch)) # Increased batch size for multi-GPU
                     for start_idx in range(0, len(obs_batch), batch_size):
                         end_idx = min(start_idx + batch_size, len(obs_batch))
                         
-                        batch_obs = obs_batch[start_idx:end_idx]
-                        batch_actions = action_batch[start_idx:end_idx]
+                        batch_obs = np.array(obs_batch[start_idx:end_idx])
+                        batch_actions = torch.FloatTensor(np.array(action_batch[start_idx:end_idx])).to(device)
+                        batch_timesteps = torch.FloatTensor(np.array(timestep_batch[start_idx:end_idx])).to(device)
                         batch_returns = returns[start_idx:end_idx]
                         
-                        if len(batch_obs) < 2:
-                            continue
+                        # Batched forward pass (Uses DataParallel if wrapped)
+                        # Extract components for whole batch
+                        joint_pos = torch.FloatTensor(batch_obs[:, :self.n_joints]).to(device)
                         
-                        # Get model predictions
-                        predicted_actions = []
-                        for obs in batch_obs:
-                            action = self._get_model_action(obs)
-                            predicted_actions.append(action)
+                        environment_type = None
+                        if batch_obs.shape[1] >= self.env_features_start + 3:
+                            water_flag = torch.FloatTensor(batch_obs[:, self.env_features_start + 1:self.env_features_start + 2]).to(device)
+                            land_flag = torch.FloatTensor(batch_obs[:, self.env_features_start + 2:self.env_features_start + 3]).to(device)
+                            vis_norm = torch.FloatTensor(batch_obs[:, self.env_features_start:self.env_features_start + 1]).to(device)
+                            environment_type = torch.cat([water_flag, land_flag, vis_norm], dim=1)
                         
-                        if len(predicted_actions) == 0:
-                            continue
+                        target_direction = None
+                        if batch_obs.shape[1] >= self.goal_features_start + 3:
+                            target_direction = torch.FloatTensor(batch_obs[:, self.goal_features_start + 1:self.goal_features_start + 3]).to(device)
                         
-                        predicted_actions = torch.stack(predicted_actions)
-                        batch_actions =  np.array(batch_actions, dtype=np.float32)
-                        actual_actions = torch.FloatTensor(batch_actions).to(device)
+                        # Get model predictions for the whole mini-batch at once
+                        if hasattr(actual_model, 'include_goal_direction') and actual_model.include_goal_direction:
+                            predicted_actions = self.ncap_model(
+                                joint_pos, 
+                                environment_type=environment_type,
+                                target_direction=target_direction,
+                                timesteps=batch_timesteps
+                            )
+                        else:
+                            predicted_actions = self.ncap_model(
+                                joint_pos, 
+                                environment_type=environment_type,
+                                timesteps=batch_timesteps
+                            )
                         
                         # Policy gradient loss
-                        loss = torch.nn.functional.mse_loss(predicted_actions, actual_actions, reduction='none')
+                        loss = torch.nn.functional.mse_loss(predicted_actions, batch_actions, reduction='none')
                         policy_loss = (loss.mean(dim=1) * batch_returns[:len(loss)]).mean()
-                        prior_loss = trainer_ref.compute_sparse_prior_loss(self.ncap_model, device=device)
-                        if trainer_ref.force_oscillation:
-                            action_variance = predicted_actions.var(dim=0, unbiased=False).mean()
-                            min_variance = torch.tensor(0.1, device=device, dtype=predicted_actions.dtype)
-                            oscillation_penalty = torch.relu(min_variance - action_variance)
-                        else:
-                            oscillation_penalty = torch.zeros((), device=device, dtype=predicted_actions.dtype)
-                        total_loss = policy_loss + prior_loss + oscillation_penalty
                         
                         # Update model
                         self.optimizer.zero_grad()
-                        total_loss.backward()
+                        policy_loss.backward()
                         torch.nn.utils.clip_grad_norm_(self.ncap_model.parameters(), 0.5)
                         has_bad_grad = False
                         for param in self.ncap_model.parameters():
@@ -552,56 +384,64 @@ class CurriculumNCAPTrainer:
                                     param.data = torch.nan_to_num(param.data, nan=0.0, posinf=1.0, neginf=-1.0)
                         
                 except Exception as e:
+                    import traceback
+                    traceback.print_exc()
                     print(f"⚠️ Training step failed: {e}")
             
-            def _reset_buffer(self):
-                """Reset episode buffer."""
-                self.episode_buffer = {'obs': [], 'actions': [], 'rewards': []}
+            def _reset_buffer(self, worker_idx):
+                """Reset specific worker's episode buffer."""
+                self.episode_buffers[worker_idx] = {'obs': [], 'actions': [], 'rewards': [], 'timesteps': []}
+                self.step_counts[worker_idx] = 0
             
             def _get_model_action(self, obs):
-                """Get action from NCAP model as tensor for training."""
-                device = next(self.ncap_model.parameters()).device
-
+                """Get action from NCAP model for a single observation (e.g. during evaluation)."""
+                # CRITICAL: Always use the underlying module for single samples to avoid DataParallel scattering errors
+                actual_model = self.ncap_model.module if isinstance(self.ncap_model, torch.nn.DataParallel) else self.ncap_model
+                device = next(actual_model.parameters()).device
+                
                 if not isinstance(obs, torch.Tensor):
                     obs = torch.tensor(obs, dtype=torch.float32, device=device)
                 elif obs.device != device:
                     obs = obs.to(device)
-
-                # Joint positions
-                nj = self._n_joints
-                joint_pos = obs[:nj] if len(obs) >= nj else torch.zeros(nj, device=device)
-
-                # Environment type: [water_flag, land_flag, viscosity_norm]
-                environment_type = None
-                ef_start = self._env_features_start
-                if len(obs) >= ef_start + 3:
-                    water_flag = obs[ef_start + 1:ef_start + 2]
-                    land_flag  = obs[ef_start + 2:ef_start + 3]
-                    vis_norm   = obs[ef_start:ef_start + 1]
-                    environment_type = torch.cat([water_flag, land_flag, vis_norm])
-
-                # Goal direction: target_direction at goal_features_start + 1 .. +3
-                target_direction = None
-                gf_start = self._goal_features_start
-                if (len(obs) >= gf_start + 3
-                        and hasattr(self.ncap_model, 'include_goal_direction')
-                        and self.ncap_model.include_goal_direction):
-                    target_direction = obs[gf_start + 1:gf_start + 3]
                 
-                # Keep the action path differentiable for policy updates.
-                if hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
-                    action = self.ncap_model(
-                        joint_pos,
-                        environment_type=environment_type,
-                        target_direction=target_direction,
-                        timesteps=torch.tensor([self.step_count], device=device)
-                    )
-                else:
-                    action = self.ncap_model(
-                        joint_pos,
-                        environment_type=environment_type,
-                        timesteps=torch.tensor([self.step_count], device=device)
-                    )
+                # Single observation handling
+                if obs.dim() == 0:
+                    return torch.zeros(self.n_joints, device=device)
+                
+                # Use dynamic offsets
+                joint_pos = obs[:self.n_joints]
+                
+                # Environment adaptation [water, land, viscosity_norm]
+                environment_type = None
+                if len(obs) >= self.env_features_start + 3:
+                    water_flag = obs[self.env_features_start + 1]
+                    land_flag = obs[self.env_features_start + 2]
+                    vis_norm = obs[self.env_features_start]
+                    environment_type = torch.tensor([water_flag, land_flag, vis_norm], dtype=torch.float32, device=device)
+                
+                # Goal direction
+                target_direction = None
+                if len(obs) >= self.goal_features_start + 3 and hasattr(actual_model, 'include_goal_direction') and actual_model.include_goal_direction:
+                    target_direction = obs[self.goal_features_start + 1:self.goal_features_start + 3]
+                
+                # Get action from the ALREADY UNWRAPPED model
+                with torch.no_grad():
+                    # We MUST increment evaluation step count separately
+                    t = torch.tensor([self.step_count], dtype=torch.float32, device=device)
+                    if hasattr(actual_model, 'include_goal_direction') and actual_model.include_goal_direction:
+                        action = actual_model(
+                            joint_pos, 
+                            environment_type=environment_type,
+                            target_direction=target_direction,
+                            timesteps=t
+                        )
+                    else:
+                        action = actual_model(
+                            joint_pos, 
+                            environment_type=environment_type,
+                            timesteps=t
+                        )
+                    self.step_count += 1 # Increment for next call
                 
                 return action
             
@@ -610,93 +450,70 @@ class CurriculumNCAPTrainer:
                 # Get device from model parameters
                 device = next(self.ncap_model.parameters()).device
                 
-                # Extract joint positions, environment info, and target info from observation
-                if isinstance(obs, dict):
-                    joint_pos = torch.tensor(obs['joints'], dtype=torch.float32, device=device)
-                    
-                    # Extract environment information for biological adaptation
-                    environment_type = None
-                    if 'environment_type' in obs and 'fluid_viscosity' in obs:
-                        env_flags = obs['environment_type']  # [water_flag, land_flag]
-                        viscosity = obs['fluid_viscosity'][0] if hasattr(obs['fluid_viscosity'], '__len__') else obs['fluid_viscosity']
-                        # Normalize viscosity for biological model
-                        vis_norm = np.clip((np.log10(viscosity) - np.log10(1e-4)) / (np.log10(1.5) - np.log10(1e-4)), 0.0, 1.0)
-                        environment_type = np.array([env_flags[0], env_flags[1], vis_norm], dtype=np.float32)
-                    
-                    # **NEW**: Extract target information for goal-directed navigation
-                    target_direction = None
-                    if hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
-                        if 'target_direction' in obs:
-                            target_direction = obs['target_direction']
-                        elif 'target_position' in obs:
-                            # Use target position as direction (simplified)
-                            target_pos = obs['target_position']
-                            target_norm = np.linalg.norm(target_pos)
-                            if target_norm > 0.1:  # Valid target
-                                target_direction = target_pos / target_norm
-                else:
-                    nj = self._n_joints
-                    joint_pos = torch.tensor(obs[:nj], dtype=torch.float32, device=device)
-
-                    environment_type = None
-                    ef_start = self._env_features_start
-                    if len(obs) >= ef_start + 3:
-                        water_flag = float(obs[ef_start + 1])
-                        land_flag  = float(obs[ef_start + 2])
-                        vis_norm   = float(obs[ef_start])
-                        environment_type = np.array([water_flag, land_flag, vis_norm], dtype=np.float32)
-
-                    target_direction = None
-                    gf_start = self._goal_features_start
-                    if (len(obs) >= gf_start + 3
-                            and hasattr(self.ncap_model, 'include_goal_direction')
-                            and self.ncap_model.include_goal_direction):
-                        target_direction = obs[gf_start + 1:gf_start + 3].copy()
-                
-                # Get NCAP action with biological adaptation and goal-directed navigation
+                # NCAP processing
                 with torch.no_grad():
-                    if hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
-                        # Enhanced NCAP with goal-directed navigation
-                        action = self.ncap_model(
-                            joint_pos, 
-                            environment_type=environment_type,
-                            target_direction=target_direction,
-                            timesteps=torch.tensor([self.step_count], device=device)
-                        )
+                    # Handle batch observations from SubprocVecEnv
+                    if obs.ndim == 2:
+                        batch_size = obs.shape[0]
+                        joint_pos = torch.tensor(obs[:, :self.n_joints], dtype=torch.float32, device=device)
+                        
+                        environment_type = None
+                        target_direction = None
+                        
+                        # Use precomputed offsets for batch extraction
+                        if obs.shape[1] >= self.env_features_start + 3:
+                            # viscosity = obs[:, start], water = obs[:, start+1], land = obs[:, start+2]
+                            vis_norm = torch.tensor(obs[:, self.env_features_start:self.env_features_start+1], dtype=torch.float32, device=device)
+                            water_flag = torch.tensor(obs[:, self.env_features_start+1:self.env_features_start+2], dtype=torch.float32, device=device)
+                            land_flag = torch.tensor(obs[:, self.env_features_start+2:self.env_features_start+3], dtype=torch.float32, device=device)
+                            environment_type = torch.cat([water_flag, land_flag, vis_norm], dim=1)
+                        
+                        if obs.shape[1] >= self.goal_features_start + 3:
+                            # target_direction is at goal_features_start + 1, + 2
+                            target_direction = torch.tensor(obs[:, self.goal_features_start+1:self.goal_features_start+3], dtype=torch.float32, device=device)
+                        
+                        timesteps = torch.tensor(self.step_counts, dtype=torch.float32, device=device)
+                        
+                        # Forward pass - self.ncap_model might be DataParallel
+                        if hasattr(self.ncap_model, 'module') and hasattr(self.ncap_model.module, 'include_goal_direction') and self.ncap_model.module.include_goal_direction:
+                            action = self.ncap_model(
+                                joint_pos, 
+                                environment_type=environment_type,
+                                target_direction=target_direction,
+                                timesteps=timesteps
+                            )
+                        elif not hasattr(self.ncap_model, 'module') and hasattr(self.ncap_model, 'include_goal_direction') and self.ncap_model.include_goal_direction:
+                            action = self.ncap_model(
+                                joint_pos, 
+                                environment_type=environment_type,
+                                target_direction=target_direction,
+                                timesteps=timesteps
+                            )
+                        else:
+                            action = self.ncap_model(
+                                joint_pos, 
+                                environment_type=environment_type,
+                                timesteps=timesteps
+                            )
+                        self.step_counts += 1
+                        return action.cpu().numpy()
                     else:
-                        # Standard biological NCAP
-                        action = self.ncap_model(
-                            joint_pos, 
-                            environment_type=environment_type,
-                            timesteps=torch.tensor([self.step_count], device=device)
-                        )
-                    self.step_count += 1
-                    
-                    # For untrained models, reduce action magnitude to prevent erratic motion
-                    if self.use_stable_init:
-                        action = torch.clamp(action, -0.3, 0.3)  # Reduced from default range
-                
-                return action.cpu().numpy()
+                        # Single observation (fallback to _get_model_action which handles unwrap)
+                        return self._get_model_action(obs).cpu().numpy()
         
-        agent = BiologicalNCAPAgent(model, env)
+        agent = BiologicalNCAPAgent(model, env, self.n_links)
         
         print(f"🧬 Created biological NCAP agent with environment adaptation for curriculum learning")
         
         return agent, model
     
-    def save_checkpoint(self, model, step, eval_results=None, optimizer=None):
-        """Save training checkpoint with model-specific naming.
-
-        Saves model weights, full training state, optimizer momentum/velocity
-        (so Adam resumes correctly), and all RNG states (so sampling is
-        reproducible after a resume).  Flushes in-memory logger metrics to
-        disk so no data is lost if the process crashes before training ends.
-        """
+    def save_checkpoint(self, model, step, eval_results=None):
+        """Save training checkpoint with model-specific naming."""
         checkpoint_path = self.artifact_namer.checkpoint_name(
-            step=step,
-            base_dir=self.curriculum_checkpoints_dir
+            step=step, 
+            base_dir="outputs/curriculum_training/checkpoints"
         )
-
+        
         checkpoint_data = {
             'model_state_dict': model.state_dict(),
             'current_step': self.current_step,
@@ -719,65 +536,48 @@ class CurriculumNCAPTrainer:
                 'anisotropic_drag_land_only': self.anisotropic_drag_land_only,
             },
             'eval_results': eval_results,
-            # Optimizer adaptive state (Adam m/v vectors) for seamless resume
-            'optimizer_state_dict': optimizer.state_dict() if optimizer is not None else None,
-            # RNG states for reproducibility across resume boundaries
-            'torch_rng_state': torch.get_rng_state(),
-            'numpy_rng_state': np.random.get_state(),
-            'python_rng_state': random.getstate(),
         }
-        if torch.cuda.is_available():
-            checkpoint_data['cuda_rng_state'] = torch.cuda.get_rng_state()
-
+        
         torch.save(checkpoint_data, checkpoint_path)
         print(f"💾 Checkpoint saved: {checkpoint_path}")
-
-        # Flush in-memory metrics to disk (guards against crash data loss)
-        self.logger.save_metrics()
-
         return checkpoint_path
     
-    def load_checkpoint(self, model, checkpoint_path, optimizer=None):
-        """Load training checkpoint with backward compatibility.
-
-        Restores model weights, training counters, phase history, optimizer
-        adaptive state (Adam m/v vectors), and all RNG states so that a
-        resumed run is statistically identical to an uninterrupted one.
-        Syncs the logger's internal step/episode counters so metrics are
-        aligned with the restored training state.
-        """
+    def load_checkpoint(self, model, checkpoint_path):
+        """Load training checkpoint with backward compatibility."""
         print(f"📂 Loading checkpoint: {checkpoint_path}")
-
-        checkpoint_data = torch.load(checkpoint_path, map_location=self.device,
-                                     weights_only=False)
-
-        # ── Model weights ────────────────────────────────────────────────────
+        
+        checkpoint_data = torch.load(checkpoint_path, map_location=self.device)
+        
+        # Load model state with compatibility for missing parameters
         try:
             model.load_state_dict(checkpoint_data['model_state_dict'])
         except RuntimeError as e:
             if "Missing key(s)" in str(e):
                 print(f"⚠️ Checkpoint compatibility issue: {e}")
                 print("🔧 Attempting to load compatible parameters only...")
-
+                
+                # Load only the parameters that exist in both model and checkpoint
                 model_state = model.state_dict()
                 checkpoint_state = checkpoint_data['model_state_dict']
-
+                
+                # Filter out missing parameters and load the rest
                 compatible_state = {}
                 missing_params = []
                 extra_params = []
-
+                
                 for key, value in checkpoint_state.items():
                     if key in model_state:
                         compatible_state[key] = value
                     else:
                         extra_params.append(key)
-
+                
                 for key in model_state.keys():
                     if key not in checkpoint_state:
                         missing_params.append(key)
-
+                
+                # Load compatible parameters
                 model.load_state_dict(compatible_state, strict=False)
-
+                
                 print(f"✅ Loaded {len(compatible_state)} compatible parameters")
                 if missing_params:
                     print(f"⚠️ Missing parameters (will use defaults): {missing_params}")
@@ -785,107 +585,56 @@ class CurriculumNCAPTrainer:
                     print(f"ℹ️ Extra parameters in checkpoint (ignored): {extra_params}")
             else:
                 raise
-
-        # ── Optimizer adaptive state ─────────────────────────────────────────
-        # Restoring Adam's m/v accumulators means the effective learning rate
-        # is immediately correct for each parameter (no warm-up artefact).
-        if (optimizer is not None
-                and 'optimizer_state_dict' in checkpoint_data
-                and checkpoint_data['optimizer_state_dict'] is not None):
-            try:
-                optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
-                print("✅ Optimizer state restored")
-            except Exception as e:
-                print(f"⚠️ Could not restore optimizer state (fresh optimizer used): {e}")
-
-        # ── RNG states ───────────────────────────────────────────────────────
-        # Restoring all RNG states ensures the resumed run draws the same
-        # random sequences as it would have without interruption.
-        if 'torch_rng_state' in checkpoint_data:
-            torch.set_rng_state(checkpoint_data['torch_rng_state'])
-        if 'numpy_rng_state' in checkpoint_data:
-            np.random.set_state(checkpoint_data['numpy_rng_state'])
-        if 'python_rng_state' in checkpoint_data:
-            random.setstate(checkpoint_data['python_rng_state'])
-        if 'cuda_rng_state' in checkpoint_data and torch.cuda.is_available():
-            torch.cuda.set_rng_state(checkpoint_data['cuda_rng_state'])
-
-        # ── Training counters and phase history ──────────────────────────────
+        
+        # Load training state with backward compatibility
         if 'current_step' in checkpoint_data:
+            # New checkpoint format
             self.current_step = checkpoint_data['current_step']
             self.current_episode = checkpoint_data['current_episode']
             self.phase_rewards = checkpoint_data.get('phase_rewards', {0: [], 1: [], 2: [], 3: []})
             self.phase_distances = checkpoint_data.get('phase_distances', {0: [], 1: [], 2: [], 3: []})
         else:
-            # Legacy checkpoint format
+            # Old checkpoint format (legacy compatibility)
             self.current_step = checkpoint_data.get('step', 0)
             self.current_episode = checkpoint_data.get('episode', 0)
-            self.phase_rewards = {0: [], 1: [], 2: [], 3: []}
+            self.phase_rewards = {0: [], 1: [], 2: [], 3: []}  # Reset for old checkpoints
             self.phase_distances = {0: [], 1: [], 2: [], 3: []}
-            print("⚠️ Legacy checkpoint format detected — phase history reset")
-
-        # ── Sync logger state ────────────────────────────────────────────────
-        # Without this, the logger's internal step counter would restart at 0
-        # and write metrics with wrong step indices.
-        self.logger.current_step = self.current_step
-        self.logger.current_episode = self.current_episode
-
+            print("⚠️ Legacy checkpoint format detected - phase history reset")
+        
         print(f"✅ Checkpoint loaded successfully!")
         print(f"   Resuming from step: {self.current_step:,}")
         print(f"   Episode: {self.current_episode:,}")
-
+        
         return checkpoint_data.get('eval_results', {})
     
     def apply_biological_constraints(self, model):
         """Apply biological constraints to maintain realism."""
         constraints_applied = []
-
-        # When sparse_init is active, use lower floor/ceiling so Cook-2019-derived
-        # weights (some as small as 0.05 for low-synapse pathways) are not immediately
-        # overridden at step 25 k before the optimizer can move them.  Without this,
-        # sparse init has no lasting effect on experiments 03/04.
-        if self.sparse_init:
-            muscle_exc_min  = 0.1
-            muscle_inh_max  = -0.1
-            coupling_min    = 0.2
-        else:
-            muscle_exc_min  = 0.5
-            muscle_inh_max  = -0.5
-            coupling_min    = self.min_coupling_strength
-
+        
         with torch.no_grad():
-            for name, param in model.params.items():
-                # Oscillator strength minimum — matches global 'bneuron_osc' and
-                # segment-specific 'bneuron_d_osc_N' / 'bneuron_v_osc_N'
-                if 'bneuron_d_osc' in name or 'bneuron_v_osc' in name or name == 'bneuron_osc':
-                    if param.item() < self.min_oscillator_strength:
-                        old_val = param.item()
-                        param.data.fill_(self.min_oscillator_strength)
-                        constraints_applied.append(f"{name} {old_val:.3f} → {self.min_oscillator_strength}")
-
-                # Coupling strength minimum — matches global 'bneuron_prop' and
-                # segment-specific 'bneuron_d_prop_N' / 'bneuron_v_prop_N'
-                elif 'bneuron_d_prop' in name or 'bneuron_v_prop' in name or name == 'bneuron_prop':
-                    if param.item() < coupling_min:
-                        old_val = param.item()
-                        param.data.fill_(coupling_min)
-                        constraints_applied.append(f"{name} {old_val:.3f} → {coupling_min}")
-
-                # Ipsilateral muscle minimum — matches global 'muscle_ipsi'
-                # and segment-specific 'muscle_d_d_N' / 'muscle_v_v_N'
-                elif name == 'muscle_ipsi' or name.startswith('muscle_d_d_') or name.startswith('muscle_v_v_'):
-                    if param.item() < muscle_exc_min:
-                        old_val = param.item()
-                        param.data.fill_(muscle_exc_min)
-                        constraints_applied.append(f"{name} {old_val:.3f} → {muscle_exc_min}")
-
-                # Contralateral muscle maximum — matches global 'muscle_contra'
-                # and segment-specific 'muscle_d_v_N' / 'muscle_v_d_N'
-                elif name == 'muscle_contra' or name.startswith('muscle_d_v_') or name.startswith('muscle_v_d_'):
-                    if param.item() > muscle_inh_max:
-                        old_val = param.item()
-                        param.data.fill_(muscle_inh_max)
-                        constraints_applied.append(f"{name} {old_val:.3f} → {muscle_inh_max}")
+            # Ensure oscillator strength minimum
+            if model.params['bneuron_osc'].item() < self.min_oscillator_strength:
+                old_val = model.params['bneuron_osc'].item()
+                model.params['bneuron_osc'].data.fill_(self.min_oscillator_strength)
+                constraints_applied.append(f"oscillator {old_val:.3f} → {self.min_oscillator_strength}")
+            
+            # Ensure coupling strength minimum
+            if model.params['bneuron_prop'].item() < self.min_coupling_strength:
+                old_val = model.params['bneuron_prop'].item()
+                model.params['bneuron_prop'].data.fill_(self.min_coupling_strength)
+                constraints_applied.append(f"coupling {old_val:.3f} → {self.min_coupling_strength}")
+            
+            # **RELAXED**: Ensure ipsilateral muscle is positive (less restrictive)
+            if model.params['muscle_ipsi'].item() < 0.5:  # **REDUCED** from 0.8 to 0.5
+                old_val = model.params['muscle_ipsi'].item()
+                model.params['muscle_ipsi'].data.fill_(0.5)
+                constraints_applied.append(f"ipsi {old_val:.3f} → 0.5")
+            
+            # **RELAXED**: Ensure contralateral muscle is negative (less restrictive)
+            if model.params['muscle_contra'].item() > -0.5:  # **REDUCED** from -0.8 to -0.5
+                old_val = model.params['muscle_contra'].item()
+                model.params['muscle_contra'].data.fill_(-0.5)
+                constraints_applied.append(f"contra {old_val:.3f} → -0.5")
         
         if constraints_applied:
             print(f"🧬 Applied biological constraints: {', '.join(constraints_applied)}")
@@ -903,7 +652,7 @@ class CurriculumNCAPTrainer:
         else:
             return 3  # Full complexity
     
-    def evaluate_performance(self, agent, env, num_episodes=5, progress_bar=None):
+    def evaluate_performance(self, agent, env_ignored, num_episodes=5, progress_bar=None):
         """Evaluate current performance across different phases."""
         evaluation_results = {}
         
@@ -913,31 +662,33 @@ class CurriculumNCAPTrainer:
             
             # Get phase-specific episode duration from configuration
             steps_per_episode = self.PHASE_DURATION_CONFIG['evaluation_steps'][phase]
-            phase_names = self.PHASE_NAMES
-
-            if steps_per_episode != self.PHASE_DURATION_CONFIG['evaluation_steps'][0]:  # Log when using non-standard duration
+            phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+            
+            if steps_per_episode != 200:  # Log when using non-standard duration
                 print(f"🎯 {phase_names[phase]}: Using {steps_per_episode} steps per episode")
             
             distances = []
             rewards = []
             
             for episode in range(num_episodes):
-                # Set environment to specific phase (property handles recreation)
-                env.env.training_progress = temp_progress
-
-                obs = env.reset()
+                # Set environment to specific phase
+                eval_env = self.create_environment()
+                eval_env.env.training_progress = temp_progress
+                eval_env.env._create_environment()
+                
+                obs = eval_env.reset()
                 episode_reward = 0
-                initial_pos = env.head_position.copy()
-
-                for _ in range(steps_per_episode):
+                initial_pos = eval_env.head_position
+                
+                for _ in range(steps_per_episode):  # Data-driven steps per episode
                     action = agent.test_step(obs)
-                    obs, reward, done, _ = env.step(action)
+                    obs, reward, done, _ = eval_env.step(action)
                     episode_reward += reward
-
+                    
                     if done:
                         break
-
-                final_pos = env.head_position.copy()
+                
+                final_pos = eval_env.head_position
                 distance = np.linalg.norm(final_pos - initial_pos)
                 
                 distances.append(distance)
@@ -945,10 +696,10 @@ class CurriculumNCAPTrainer:
                 
                 # Update progress bar if provided
                 if progress_bar is not None:
-                    progress_bar.set_description(
-                        f"🔬 Evaluating {self.PHASE_NAMES[phase]} ({episode+1}/{num_episodes})"
-                    )
+                    phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+                    progress_bar.set_description(f"🔬 Evaluating {phase_names[phase]} ({episode+1}/{num_episodes})")
                     progress_bar.update(1)
+                eval_env.close()
             
             evaluation_results[phase] = {
                 'mean_distance': np.mean(distances),
@@ -965,24 +716,19 @@ class CurriculumNCAPTrainer:
         print(f"   Target: {self.training_steps:,} steps")
         print(f"   Biological constraints every {self.biological_constraint_frequency:,} steps")
         
-        # Create environment and model based on model_type
-        env = self.create_environment()
+        # Create vectorized environment
+        env = self.create_vectorized_environment()
         model = self.create_model()
         agent, tonic_model = self.create_agent(model, env)
         
-        # Load checkpoint if resuming (pass optimizer so its adaptive state is restored)
+        # Load checkpoint if resuming
         if self.resume_from_checkpoint:
-            self.load_checkpoint(tonic_model, self.resume_from_checkpoint,
-                                 optimizer=agent.optimizer)
+            self.load_checkpoint(model, self.resume_from_checkpoint)
         
         # Training loop with advanced monitoring
         start_time = time.time()
         self.logger.start_time = start_time
         last_phase = -1
-        # Rolling throughput: track the step count and wall-clock time at the
-        # last log event so steps/sec reflects recent rate, not total average.
-        self._last_log_step = self.current_step
-        self._last_log_time = start_time
         
         # Start hardware monitoring if available
         if ADVANCED_LOGGING_AVAILABLE:
@@ -1002,124 +748,90 @@ class CurriculumNCAPTrainer:
         # Phase progress tracking
         phase_names = ["🏊 Pure Swimming", "🏝️ Single Land Zone", "🏝️🏝️ Two Land Zones", "🌍 Full Complexity"]
         
+        # Reset vectorized environment
+        obs = env.reset()
+        episode_rewards = np.zeros(self.num_workers)
+        episode_distances = np.zeros(self.num_workers)
+        initial_positions = np.array(env.get_attr('head_position')).copy()
+        
         while self.current_step < self.training_steps:
             # Get current training progress
             progress = self.current_step / self.training_steps
             current_phase = self.get_current_phase(progress)
             
+            # Update environment progress across all workers (Reduced frequency to optimize speed)
+            if self.current_step % (self.num_workers * 100) < self.num_workers:
+                env.set_attr('env.training_progress', progress)
+            
             # Check for phase transitions
             if current_phase != last_phase:
-                # Update progress bar description with new phase
                 main_pbar.set_description(f"🎓 Curriculum Training - {phase_names[current_phase]}")
-                
                 tqdm.write(f"\n🎓 PHASE TRANSITION: {last_phase} → {current_phase}")
-                tqdm.write(f"   Progress: {progress:.2%}")
-                tqdm.write(f"   Step: {self.current_step:,}/{self.training_steps:,}")
-                
-                # Evaluate performance at phase transition
-                if last_phase >= 0:  # Skip initial evaluation
-                    eval_results = self.evaluate_performance(agent, env)
-                    tqdm.write(f"   Phase {last_phase} final performance:")
-                    for phase, results in eval_results.items():
-                        if phase <= last_phase:
-                            tqdm.write(f"     Phase {phase}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
-
-                # ── Curriculum gate: unlock goal-directed navigation ──────────
-                # The model is created at step-0 in locomotion_only_mode so that
-                # the agent first masters pure forward propulsion.  Once we leave
-                # Phase 0 (steps > 30 % of total) we flip the runtime flags so
-                # the same model starts receiving and acting on goal signals.
-                # No weight re-initialisation is needed: the locomotion sub-net
-                # is already trained and the new goal pathway starts from its
-                # random initial weights.
-                if (last_phase == 0 and current_phase > 0
-                        and self.use_locomotion_only_early_training):
-                    if hasattr(model, "locomotion_only_mode"):
-                        model.locomotion_only_mode = False
-                        tqdm.write("   🔓 locomotion_only_mode → False")
-                    if hasattr(model, "include_goal_direction"):
-                        model.include_goal_direction = True
-                        tqdm.write("   🎯 include_goal_direction → True")
-                    tqdm.write("   Locomotion phase complete — goal-directed "
-                               "navigation now active.")
-
                 last_phase = current_phase
             
-            # Apply biological constraints periodically.
-            # Skip step 0 so that connectome-based sparse initialisation is not
-            # immediately overridden by the minimum-value clamps.
-            if (self.current_step > 0
-                    and self.current_step % self.biological_constraint_frequency == 0):
-                self.apply_biological_constraints(model)
+            # Apply biological constraints periodically
+            if self.current_step % self.biological_constraint_frequency < self.num_workers:
+                actual_model = model.module if isinstance(model, torch.nn.DataParallel) else model
+                self.apply_biological_constraints(actual_model)
             
-            # Training step — update curriculum progress each episode
-            env.env.training_progress = progress
-            obs = env.reset()
-            episode_reward = 0
-            episode_steps = 0
-            initial_pos = env.head_position.copy()
+            # Step all environments in parallel
+            actions = agent.step(obs)
+            next_obs, rewards, dones, infos = env.step(actions)
+            rewards = np.asarray(rewards, dtype=np.float32)
+            rewards = np.nan_to_num(rewards, nan=0.0, posinf=0.0, neginf=0.0)
+            dones = np.asarray(dones, dtype=bool)
+            agent.add_rewards(rewards)
             
-            # Run episode
-            episode_start_step = self.current_step
-            env_type_samples = []  # Track environment-type signal for neuromodulation diagnostics
-            for _ in range(1000):  # Max episode length
-                action = agent.step(obs)
-                obs, reward, done, _ = env.step(action)
-
-                # Track neuromodulation signal: land_flag is at env_features_start + 2
-                _ef = agent._env_features_start
-                if len(obs) > _ef + 2:
-                    env_type_samples.append(float(obs[_ef + 2]))
-
-                # CRITICAL: Add reward to agent for training (was missing!)
-                agent.add_reward(reward)
-
-                episode_reward += reward
-                episode_steps += 1
-                self.current_step += 1
-
-                if done or self.current_step >= self.training_steps:
-                    break
-
-            # CRITICAL: Train on episode experience (was missing!)
-            agent.end_episode()
-
-            # Neuromodulation diagnostic: log variance of land_flag across episode.
-            # Near-zero variance in Phase 0 is expected (always water). Non-zero in
-            # Phase 2+ means the agent is actually triggering environment transitions
-            # and the frequency-adaptation pathway is receiving varied input.
-            neuromod_variance = float(np.var(env_type_samples)) if env_type_samples else 0.0
+            episode_rewards += rewards
+            self.current_step += self.num_workers
             
-            # Update progress bar for steps taken this episode
-            steps_this_episode = self.current_step - episode_start_step
-            main_pbar.update(steps_this_episode)
+            # Update progress bar periodically to reduce overhead
+            if self.current_step % (self.num_workers * 10) < self.num_workers:
+                main_pbar.update(self.num_workers * 10)
             
-            # Calculate episode distance
-            final_pos = env.head_position.copy()
-            episode_distance = np.linalg.norm(final_pos - initial_pos)
+            # Handle episode completions
+            if np.any(dones):
+                done_indices = np.where(dones)[0]
+                
+                # Calculate distances for completed episodes
+                current_head_positions = np.array(env.get_attr('head_position')).copy()
+                
+                for idx in done_indices:
+                    episode_distance = np.linalg.norm(current_head_positions[idx] - initial_positions[idx])
+                    episode_reward_value = float(np.nan_to_num(episode_rewards[idx], nan=0.0, posinf=0.0, neginf=0.0))
+                    episode_distance_value = float(np.nan_to_num(episode_distance, nan=0.0, posinf=0.0, neginf=0.0))
+                    
+                    self.current_episode += 1
+                    self.phase_rewards[current_phase].append(episode_reward_value)
+                    self.phase_distances[current_phase].append(episode_distance_value)
+                    
+                    # Log to file periodically
+                    if self.current_episode % self.log_episodes == 0:
+                        self.logger.log_training_step({
+                            'step': self.current_step,
+                            'episode': self.current_episode,
+                            'phase': current_phase,
+                            'reward': episode_reward_value,
+                            'distance': episode_distance_value,
+                        })
+                    
+                    # Reset worker state
+                    episode_rewards[idx] = 0
+                    episode_distances[idx] = 0
+                    initial_positions[idx] = current_head_positions[idx]
+                
+                # Train on completed episodes
+                agent.end_episodes(done_indices)
             
-            # Log episode results
-            self.current_episode += 1
-            self.phase_rewards[current_phase].append(episode_reward)
-            self.phase_distances[current_phase].append(episode_distance)
+            obs = next_obs
             
-            # Periodic logging with ETA
-            if self.current_episode % self.log_episodes == 0:
+            # Periodic logging
+            if self.current_episode % self.log_episodes == 0 and np.any(dones):
                 elapsed_time = time.time() - start_time
-                # Rolling window rate (steps since last log / time since last log)
-                _now = time.time()
-                _window_steps = self.current_step - self._last_log_step
-                _window_time = _now - self._last_log_time
-                steps_per_sec = _window_steps / _window_time if _window_time > 1e-6 else 0.0
-                self._last_log_step = self.current_step
-                self._last_log_time = _now
+                steps_per_sec = self.current_step / elapsed_time if elapsed_time > 0 else 0
                 
-                recent_rewards = self.phase_rewards[current_phase][-10:] if self.phase_rewards[current_phase] else [0]
-                recent_distances = self.phase_distances[current_phase][-10:] if self.phase_distances[current_phase] else [0]
-                
-                # Update progress bar postfix with current stats
-                recent_reward = np.mean(recent_rewards)
-                recent_distance = np.mean(recent_distances)
+                recent_reward = np.mean(self.phase_rewards[current_phase][-10:]) if self.phase_rewards[current_phase] else 0
+                recent_distance = np.mean(self.phase_distances[current_phase][-10:]) if self.phase_distances[current_phase] else 0
                 
                 main_pbar.set_postfix({
                     'Phase': current_phase,
@@ -1144,17 +856,16 @@ class CurriculumNCAPTrainer:
                               f"Distance: {recent_distance:6.3f}m | "
                               f"Steps/s: {steps_per_sec:.1f}{eta_str}")
                 
-                # Log to file — keys match plot_ablation.py's _series() expectations
+                # Log to file
                 self.logger.log_training_step({
                     'step': self.current_step,
                     'episode': self.current_episode,
                     'phase': current_phase,
                     'progress': progress,
-                    'episode_reward': episode_reward,
-                    'episode_distance': episode_distance,
-                    'mean_reward_10': np.mean(recent_rewards),
-                    'mean_distance_10': np.mean(recent_distances),
-                    'neuromod_variance': neuromod_variance,
+                    'reward': recent_reward,
+                    'distance': recent_distance,
+                    'mean_reward_10': recent_reward,   # recent_reward is already a mean of 10
+                    'mean_distance_10': recent_distance,
                 })
             
             # Periodic saves and evaluation
@@ -1165,8 +876,7 @@ class CurriculumNCAPTrainer:
                 eval_results = self.evaluate_performance(agent, env, num_episodes=10)
                 
                 # Save comprehensive checkpoint with eval results
-                checkpoint_path = self.save_checkpoint(tonic_model, self.current_step, eval_results,
-                                                        optimizer=agent.optimizer)
+                checkpoint_path = self.save_checkpoint(tonic_model, self.current_step, eval_results)
                 tqdm.write(f"📊 Performance across all phases:")
                 for phase, results in eval_results.items():
                     tqdm.write(f"   Phase {phase}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f} "
@@ -1189,7 +899,7 @@ class CurriculumNCAPTrainer:
                     plot_path = self.artifact_namer.analysis_plot_name(
                         "curriculum_progress", 
                         step=self.current_step,
-                        base_dir=self.curriculum_plots_dir
+                        base_dir="outputs/curriculum_training/plots"
                     )
                     create_curriculum_plots(
                         phase_rewards=self.phase_rewards,
@@ -1200,17 +910,20 @@ class CurriculumNCAPTrainer:
                 
                 # Create trajectory analysis
                 current_phase = min(int(self.current_step / (self.training_steps / 4)), 3)
-                phase_names = self.PHASE_NAMES
+                phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
                 trajectory_path = self.artifact_namer.analysis_plot_name(
                     "trajectory_analysis", 
                     step=self.current_step,
                     phase=f"phase{current_phase}",
-                    base_dir=self.curriculum_plots_dir
+                    base_dir="outputs/curriculum_training/plots"
                 )
+                
+                # Need a single environment for visualizations
+                eval_env = self.create_environment()
                 
                 trajectory_stats = create_trajectory_analysis(
                     agent=agent,
-                    env=env,
+                    env=eval_env,
                     save_path=trajectory_path,
                     num_steps=500,
                     phase_name=f"Step {self.current_step} - {phase_names[current_phase]}",
@@ -1224,15 +937,16 @@ class CurriculumNCAPTrainer:
                 video_path = self.artifact_namer.training_video_name(
                     step=self.current_step,
                     phase=f"phase{current_phase}",
-                    base_dir=self.curriculum_videos_dir
+                    base_dir="outputs/curriculum_training/videos"
                 )
                 create_test_video(
                     agent=agent,
-                    env=env,
+                    env=eval_env,
                     save_path=video_path,
                     num_steps=300,
                     episode_name=f"Curriculum Step {self.current_step}"
                 )
+                eval_env.close()
         
         # Close progress bar
         main_pbar.close()
@@ -1280,11 +994,12 @@ class CurriculumNCAPTrainer:
         
         tqdm.write(f"\n📊 Final Performance Summary:")
         for phase, results in final_eval.items():
-            tqdm.write(f"   {self.PHASE_NAMES[phase]}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
+            phase_names_final = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
+            tqdm.write(f"   {phase_names_final[phase]}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
         
         # Save final model
         final_path = self.artifact_namer.final_model_name(
-            base_dir=self.curriculum_models_dir
+            base_dir="outputs/curriculum_training/models"
         )
         torch.save({
             'model_state_dict': model.state_dict(),
@@ -1319,7 +1034,7 @@ class CurriculumNCAPTrainer:
             pbar.set_description("📊 Creating training plots")
             final_plot_path = self.artifact_namer.analysis_plot_name(
                 "curriculum_final", 
-                base_dir=self.curriculum_plots_dir
+                base_dir="outputs/curriculum_training/plots"
             )
             create_curriculum_plots(
                 phase_rewards=self.phase_rewards,
@@ -1331,26 +1046,26 @@ class CurriculumNCAPTrainer:
             tqdm.write(f"✅ Training plots saved to: {final_plot_path}")
             
             # Final trajectory analysis for each phase
-            phase_names = self.PHASE_NAMES
+            phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
             final_trajectory_stats = {}
             
             for phase in range(4):
                 pbar.set_description(f"📊 Analyzing {phase_names[phase]}")
                 
                 # Set environment to specific phase using manual override
+                eval_env = self.create_environment()
                 temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
-                force_land_for_evaluation = (phase >= 1 and
-                    not getattr(env.env, 'prefer_transition_evaluation', False))
-                env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
+                force_land_for_evaluation = phase >= 1 and not getattr(eval_env.env, 'prefer_transition_evaluation', False)
+                eval_env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 trajectory_path = self.artifact_namer.analysis_plot_name(
                     "final_trajectory", 
                     phase=f"phase{phase}",
-                    base_dir=self.curriculum_plots_dir
+                    base_dir="outputs/curriculum_training/plots"
                 )
                 stats = create_trajectory_analysis(
                     agent=agent,
-                    env=env,
+                    env=eval_env,
                     save_path=trajectory_path,
                     num_steps=1000,  # Longer analysis for final evaluation
                     phase_name=f"Final - {phase_names[phase]}",
@@ -1365,22 +1080,24 @@ class CurriculumNCAPTrainer:
             pbar.set_description("🎬 Creating phase comparison video")
             final_video_path = self.artifact_namer.evaluation_video_name(
                 evaluation_type="phase_comparison_final",
-                base_dir=self.curriculum_videos_dir
+                base_dir="outputs/curriculum_training/videos"
             )
+            eval_env = self.create_environment()
             create_phase_comparison_video(
                 agent=agent,
-                env=env,
+                env=eval_env,
                 save_path=final_video_path,
                 phases_to_test=[0, 1, 2, 3],
                 phase_video_steps=self.PHASE_DURATION_CONFIG['video_steps']
             )
+            eval_env.close()
             pbar.update(1)
             tqdm.write(f"✅ Phase comparison video: {final_video_path}")
             
             # Training summary
             pbar.set_description("📄 Generating training summary")
             summary_path = self.artifact_namer.experiment_summary_name(
-                base_dir=self.curriculum_summaries_dir
+                base_dir="outputs/curriculum_training/summaries"
             )
             save_training_summary(
                 eval_results=final_eval,
@@ -1459,8 +1176,9 @@ class CurriculumNCAPTrainer:
         
 
         print(f"\n📊 Performance Summary:")
+        phase_names_final = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
         for phase, results in final_eval.items():
-            print(f"   {self.PHASE_NAMES[phase]}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
+            print(f"   {phase_names_final[phase]}: {results['mean_distance']:.3f}m ± {results['std_distance']:.3f}")
         
         print(f"\n🎨 Creating comprehensive visualizations...")
         with tqdm(total=8, desc="📊 Creating Visualizations", unit="task",
@@ -1470,7 +1188,7 @@ class CurriculumNCAPTrainer:
             vis_pbar.set_description("📊 Creating final training plots")
             eval_plot_path = self.artifact_namer.analysis_plot_name(
                 "evaluation_final", 
-                base_dir=self.curriculum_plots_dir
+                base_dir="outputs/curriculum_training/plots"
             )
             create_curriculum_plots(
                 phase_rewards=self.phase_rewards,
@@ -1482,26 +1200,26 @@ class CurriculumNCAPTrainer:
             print(f"✅ Training plots saved to: {eval_plot_path}")
             
             # Trajectory analysis for each phase
-            phase_names = self.PHASE_NAMES
+            phase_names = ["Pure Swimming", "Single Land Zone", "Two Land Zones", "Full Complexity"]
             final_trajectory_stats = {}
             
             for phase in range(4):
                 vis_pbar.set_description(f"📊 Analyzing {phase_names[phase]}")
                 
                 # Set environment to specific phase
+                eval_env = self.create_environment()
                 temp_progress = (phase + 0.5) * 0.25  # Middle of each phase
-                force_land_for_evaluation = (phase >= 1 and
-                    not getattr(env.env, 'prefer_transition_evaluation', False))
-                env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
+                force_land_for_evaluation = phase >= 1 and not getattr(eval_env.env, 'prefer_transition_evaluation', False)
+                eval_env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 eval_trajectory_path = self.artifact_namer.analysis_plot_name(
                     "evaluation_trajectory", 
                     phase=f"phase{phase}",
-                    base_dir=self.curriculum_plots_dir
+                    base_dir="outputs/curriculum_training/plots"
                 )
                 trajectory_stats = create_trajectory_analysis(
                     agent=agent,
-                    env=env,
+                    env=eval_env,
                     save_path=eval_trajectory_path,
                     num_steps=video_steps,
                     phase_name=f"Evaluation - {phase_names[phase]}",
@@ -1509,6 +1227,7 @@ class CurriculumNCAPTrainer:
                 )
                 
                 final_trajectory_stats[phase] = trajectory_stats
+                eval_env.close()
                 vis_pbar.update(1)
                 print(f"   ✅ {phase_names[phase]}: {trajectory_stats['final_distance']:.3f}m, {trajectory_stats['transitions']} transitions")
             
@@ -1516,15 +1235,17 @@ class CurriculumNCAPTrainer:
             vis_pbar.set_description("🎬 Creating phase comparison video")
             eval_comparison_video_path = self.artifact_namer.evaluation_video_name(
                 evaluation_type="phase_comparison",
-                base_dir=self.curriculum_videos_dir
+                base_dir="outputs/curriculum_training/videos"
             )
+            eval_env = self.create_environment()
             create_phase_comparison_video(
                 agent=agent,
-                env=env,
+                env=eval_env,
                 save_path=eval_comparison_video_path,
                 phases_to_test=[0, 1, 2, 3],
                 phase_video_steps=self.PHASE_DURATION_CONFIG['video_steps']
             )
+            eval_env.close()
             vis_pbar.update(1)
             print(f"✅ Phase comparison video: {eval_comparison_video_path}")
             
@@ -1532,30 +1253,30 @@ class CurriculumNCAPTrainer:
             for phase in range(4):
                 vis_pbar.set_description(f"🎬 Creating {phase_names[phase]} video")
                 
-                # Set environment to specific phase
+                eval_env = self.create_environment()
                 temp_progress = (phase + 0.5) * 0.25
-                force_land_for_evaluation = (phase >= 1 and
-                    not getattr(env.env, 'prefer_transition_evaluation', False))
-                env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
+                force_land_for_evaluation = phase >= 1 and not getattr(eval_env.env, 'prefer_transition_evaluation', False)
+                eval_env.env.set_manual_progress(temp_progress, force_land_start=force_land_for_evaluation)
                 
                 phase_video_path = self.artifact_namer.evaluation_video_name(
                     evaluation_type=f"phase{phase}_{phase_names[phase].lower().replace(' ', '_')}",
-                    base_dir=self.curriculum_videos_dir
+                    base_dir="outputs/curriculum_training/videos"
                 )
                 create_test_video(
                     agent=agent,
-                    env=env,
+                    env=eval_env,
                     save_path=phase_video_path,
                     num_steps=video_steps,
                     episode_name=f"Evaluation - {phase_names[phase]}"
                 )
+                eval_env.close()
                 print(f"   ✅ {phase_names[phase]} video: {phase_video_path}")
             vis_pbar.update(1)
             
             # Training summary
             vis_pbar.set_description("📄 Generating evaluation summary")
             eval_summary_path = self.artifact_namer.experiment_summary_name(
-                base_dir=self.curriculum_summaries_dir
+                base_dir="outputs/curriculum_training/summaries"
             ).replace("_experiment_summary.md", "_evaluation_summary.md")
             save_training_summary(
                 eval_results=final_eval,

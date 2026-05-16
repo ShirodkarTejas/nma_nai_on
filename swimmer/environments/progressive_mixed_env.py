@@ -11,8 +11,12 @@ from dm_control import suite
 from dm_control.suite import swimmer
 from dm_control.rl import control
 from dm_control.utils import rewards
-import gym
-from gym import spaces
+try:
+    import gymnasium as gym
+    from gymnasium import spaces
+except ImportError:
+    import gym
+    from gym import spaces
 from .physics_fix import apply_swimming_physics_fix
 
 # **NEW**: Enhanced 3D visualization imports
@@ -29,6 +33,12 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                  water_viscosity=0.001,
                  land_viscosity=0.05,  # **REDUCED** from 1.5 to 0.15 - more reasonable crawling resistance
                  training_progress=0.0,  # 0.0 = pure swimming, 1.0 = full mixed
+                 expose_environment_observation=True,
+                 expose_viscosity_observation=True,
+                 anisotropic_drag_mode='off',
+                 anisotropic_drag_ratio=10.0,
+                 anisotropic_drag_gain=0.02,
+                 anisotropic_drag_land_only=True,
                  **kwargs):
         super().__init__(**kwargs)
         self._desired_speed = desired_speed
@@ -36,6 +46,12 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         self._water_viscosity = water_viscosity
         self._land_viscosity = land_viscosity
         self._training_progress = training_progress
+        self._expose_environment_observation = expose_environment_observation
+        self._expose_viscosity_observation = expose_viscosity_observation
+        self._anisotropic_drag_mode = anisotropic_drag_mode
+        self._anisotropic_drag_ratio = anisotropic_drag_ratio
+        self._anisotropic_drag_gain = anisotropic_drag_gain
+        self._anisotropic_drag_land_only = anisotropic_drag_land_only
         
         # Progressive complexity based on training progress
         self._current_land_zones = self._get_progressive_land_zones()
@@ -63,6 +79,10 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         # **NEW**: 3D visualization tracking
         self._zone_indicators_created = False
         self._last_visualization_phase = -1
+        
+        # State for anisotropic drag proxy experiments.
+        self._segment_body_names = []
+        self._previous_body_positions = None
         
     # Note: Timeout calculation removed - agent must reach targets to advance, no more reward hacking!
     
@@ -173,8 +193,120 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
         # Set progressive environment properties
         self._update_environment_physics(physics)
         
+        # Reset anisotropic drag state each episode.
+        self._segment_body_names = self._identify_segment_bodies(physics)
+        self._previous_body_positions = self._get_body_positions(physics, self._segment_body_names)
+        self._clear_applied_forces(physics)
+        
         # **NEW**: Add 3D zone and target visualization
         self._setup_3d_visualization(physics)
+
+    def _identify_segment_bodies(self, physics):
+        """Identify swimmer segment bodies for drag-proxy experiments."""
+        try:
+            all_names = list(physics.named.data.xpos.axes.row.names)
+        except Exception:
+            return []
+        
+        body_names = [
+            name for name in all_names
+            if ('head' in name or 'link' in name or 'torso' in name or 'body' in name)
+        ]
+        return body_names
+
+    def _get_body_positions(self, physics, body_names):
+        """Return XY positions for each tracked body segment."""
+        positions = []
+        for body_name in body_names:
+            try:
+                positions.append(np.array(physics.named.data.xpos[body_name][:2], dtype=np.float32))
+            except Exception:
+                continue
+        return np.array(positions, dtype=np.float32) if positions else np.zeros((0, 2), dtype=np.float32)
+
+    def _in_land_zone(self, position_xy):
+        """Check whether a 2D position lies in any active land zone."""
+        for zone in self._current_land_zones:
+            if np.linalg.norm(position_xy - np.array(zone['center'], dtype=np.float32)) < zone['radius']:
+                return True
+        return False
+
+    def _clear_applied_forces(self, physics):
+        """Reset any externally applied forces from the drag proxy."""
+        try:
+            physics.data.xfrc_applied[:] = 0.0
+        except Exception:
+            pass
+
+    def _apply_anisotropic_drag_proxy(self, physics):
+        """
+        Apply a simple anisotropic drag proxy.
+        
+        This is not a full contact-mechanics model. It approximates the literature's
+        normal-vs-tangential drag asymmetry by penalizing lateral body motion more than
+        motion along each segment's instantaneous axis.
+        """
+        if self._anisotropic_drag_mode != 'proxy':
+            self._clear_applied_forces(physics)
+            return
+        
+        if not self._segment_body_names:
+            self._segment_body_names = self._identify_segment_bodies(physics)
+        
+        current_positions = self._get_body_positions(physics, self._segment_body_names)
+        if len(current_positions) == 0:
+            return
+        
+        if self._previous_body_positions is None or len(self._previous_body_positions) != len(current_positions):
+            self._previous_body_positions = current_positions.copy()
+            self._clear_applied_forces(physics)
+            return
+        
+        dt = max(float(swimmer._CONTROL_TIMESTEP), 1e-6)
+        velocities = (current_positions - self._previous_body_positions) / dt
+        self._clear_applied_forces(physics)
+        
+        for idx, body_name in enumerate(self._segment_body_names[:len(current_positions)]):
+            body_pos = current_positions[idx]
+            if self._anisotropic_drag_land_only and not self._in_land_zone(body_pos):
+                continue
+            
+            if len(current_positions) == 1:
+                tangent = np.array([1.0, 0.0], dtype=np.float32)
+            elif idx < len(current_positions) - 1:
+                tangent = current_positions[idx + 1] - current_positions[idx]
+            else:
+                tangent = current_positions[idx] - current_positions[idx - 1]
+            
+            norm = np.linalg.norm(tangent)
+            if norm < 1e-6:
+                tangent = np.array([1.0, 0.0], dtype=np.float32)
+            else:
+                tangent = tangent / norm
+            
+            normal = np.array([-tangent[1], tangent[0]], dtype=np.float32)
+            velocity = velocities[idx]
+            v_tangent = float(np.dot(velocity, tangent))
+            v_normal = float(np.dot(velocity, normal))
+            
+            drag_force_xy = -self._anisotropic_drag_gain * (
+                v_tangent * tangent +
+                self._anisotropic_drag_ratio * v_normal * normal
+            )
+            
+            try:
+                body_id = physics.model.name2id(body_name, 'body')
+                physics.data.xfrc_applied[body_id, 0] = drag_force_xy[0]
+                physics.data.xfrc_applied[body_id, 1] = drag_force_xy[1]
+            except Exception:
+                continue
+        
+        self._previous_body_positions = current_positions.copy()
+
+    def before_step(self, action, physics):
+        """Apply optional drag proxy before MuJoCo integrates the next step."""
+        self._apply_anisotropic_drag_proxy(physics)
+        return super().before_step(action, physics)
 
     def _setup_3d_visualization(self, physics):
         """Setup enhanced 3D visual indicators for zones and targets."""
@@ -735,10 +867,24 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             
             self._last_environment = current_environment
             
-            obs['fluid_viscosity'] = np.array([current_viscosity], dtype=np.float32)
-            obs['environment_type'] = np.array([1.0 if in_water else 0.0, 1.0 if in_land else 0.0], dtype=np.float32)
-            obs['in_water_zone'] = np.array([1.0 if in_water else 0.0], dtype=np.float32)
-            obs['in_land_zone'] = np.array([1.0 if in_land else 0.0], dtype=np.float32)
+            if self._expose_viscosity_observation:
+                obs['fluid_viscosity'] = np.array([current_viscosity], dtype=np.float32)
+            else:
+                obs['fluid_viscosity'] = np.array([0.0], dtype=np.float32)
+            
+            if self._expose_environment_observation:
+                obs['environment_type'] = np.array([1.0 if in_water else 0.0, 1.0 if in_land else 0.0], dtype=np.float32)
+                obs['in_water_zone'] = np.array([1.0 if in_water else 0.0], dtype=np.float32)
+                obs['in_land_zone'] = np.array([1.0 if in_land else 0.0], dtype=np.float32)
+            else:
+                obs['environment_type'] = np.array([0.0, 0.0], dtype=np.float32)
+                obs['in_water_zone'] = np.array([0.0], dtype=np.float32)
+                obs['in_land_zone'] = np.array([0.0], dtype=np.float32)
+        else:
+            obs['fluid_viscosity'] = np.array([0.0 if not self._expose_viscosity_observation else self._water_viscosity], dtype=np.float32)
+            obs['environment_type'] = np.array([0.0, 0.0] if not self._expose_environment_observation else [1.0, 0.0], dtype=np.float32)
+            obs['in_water_zone'] = np.array([0.0 if not self._expose_environment_observation else 1.0], dtype=np.float32)
+            obs['in_land_zone'] = np.array([0.0], dtype=np.float32)
         
         # **NEW**: Update target visualization dynamically (pulsing effect)
         self._update_dynamic_target_visualization(physics)
@@ -771,38 +917,12 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
     def get_reward(self, physics):
         """Enhanced reward with goal-directed navigation - FIXED to encourage land zone usage."""
         head_pos = physics.named.data.xpos['head'][:2]
-        head_vel = physics.named.data.sensordata['head_vel'][:2]
-
-        # Phase 1: dense velocity-toward-target swimming reward.
-        # Previously base_reward=0.0 here, which gave near-zero learning signal
-        # because the 500-point jackpot target is 1.5m away and rarely reached by
-        # an untrained agent. The time penalty then dominated, making rewards
-        # consistently negative and gradient near-zero.
+        forward_velocity = -physics.named.data.sensordata['head_vel'][1]
+        
+        # **LAND AVOIDANCE FIX: Completely eliminate all movement penalties**
         if self._training_progress < 0.3:
-            # Compute velocity projected onto the direction of the current target
-            if self._current_targets:
-                tgt_idx = min(self._current_target_index, len(self._current_targets) - 1)
-                target_pos = np.array(self._current_targets[tgt_idx]['position'], dtype=np.float64)
-                target_vec = target_pos - head_pos
-                dist = np.linalg.norm(target_vec)
-                if dist > 1e-6:
-                    target_dir = target_vec / dist
-                    vel_toward = float(np.dot(head_vel, target_dir))
-                else:
-                    vel_toward = 0.0
-            else:
-                vel_toward = float(head_vel[0])
-
-            # Shaped swimming reward: tolerance + bonus for sustained forward motion
-            base_reward = rewards.tolerance(
-                vel_toward,
-                bounds=(0.05, float('inf')),
-                margin=0.1,
-                value_at_margin=0.,
-                sigmoid='linear',
-            ) * 4.0
-            if vel_toward > 0.05:
-                base_reward += 2.0 * vel_toward
+            # Phase 1: Only reward target approach, NO base swimming reward
+            base_reward = 0.0  # Pure navigation focus
         else:
             # Phase 2+: Mixed environment reward - ENCOURAGE both environments
             # Determine current environment
@@ -847,10 +967,10 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                         pass
                 self._last_on_land = False
         
-        # Time penalty: every step costs points, forcing the agent to reach targets quickly.
-        # Reduced from -0.01 to -0.003: the old value dominated Phase 1 rewards
-        # (-10/episode vs ~1-2 navigation reward), masking any learning signal.
-        time_penalty = -0.003
+        # **FIX: Add small baseline activity reward to prevent completely negative rewards**
+        joint_velocities = physics.data.qvel
+        joint_activity = np.sum(np.abs(joint_velocities))
+        baseline_activity_reward = min(joint_activity * 0.01, 0.1)  # Small positive reward for any movement
         
         # **FIX: Add environment diversity bonus**
         environment_diversity_bonus = 0.0
@@ -905,27 +1025,8 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 except ImportError:
                     pass
             
-            # Track progress monitoring
-            if self._target_visit_timer > 0 and self._target_visit_timer % 300 == 0:
-                if hasattr(self, '_initial_target_distance'):
-                    distance_traveled = max(0, self._initial_target_distance - distance_to_target)
-                    time_elapsed = self._target_visit_timer / 30.0  # Convert to seconds
-                    actual_speed = distance_traveled / time_elapsed if time_elapsed > 0 else 0
-                    
-                    try:
-                        from tqdm import tqdm
-                        current_target_info = f"Target #{self._targets_reached + 1}"
-                        progress_percent = (distance_traveled / self._initial_target_distance * 100) if self._initial_target_distance > 0 else 0
-                        target_env = "🏝️ LAND" if current_target['type'] == 'land' else "🌊 WATER"
-                        
-                        # **FIX: Add warning for very distant targets that may be unreachable**
-                        if self._initial_target_distance > 3.0 and distance_traveled < 0.5:
-                            tqdm.write(f"⚠️ Progress update {current_target_info} ({target_env}): {distance_traveled:.2f}m/{self._initial_target_distance:.2f}m ({progress_percent:.1f}%) in {time_elapsed:.1f}s = {actual_speed:.3f}m/s")
-                            tqdm.write(f"   Warning: Target is very distant ({self._initial_target_distance:.1f}m) - may require advanced training")
-                        else:
-                            tqdm.write(f"🏊 Progress update {current_target_info} ({target_env}): {distance_traveled:.2f}m/{self._initial_target_distance:.2f}m ({progress_percent:.1f}%) in {time_elapsed:.1f}s = {actual_speed:.3f}m/s")
-                    except ImportError:
-                        pass
+            # Progress monitoring silenced
+            pass
             
             # **ULTIMATE CIRCULAR SWIMMING FIX**: Reward progress, not proximity
             # Only reward actual progress toward target (not just being close)
@@ -933,16 +1034,16 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                 progress_made = max(0, self._initial_target_distance - distance_to_target)
                 progress_ratio = progress_made / self._initial_target_distance
                 
-                # Reward based on cumulative progress (diminishes over time spent), amplified 10x
+                # Reward based on cumulative progress (diminishes over time spent)
                 time_factor = max(0.1, 1.0 - (self._target_visit_timer / 900.0))  # Decay over 30 seconds
-                progress_reward = progress_ratio * 20.0 * time_factor * target_type_multiplier
+                progress_reward = progress_ratio * 2.0 * time_factor * target_type_multiplier  # **APPLY TARGET BONUS**
                 navigation_reward += progress_reward
                 
                 # Small directional bonus only when making progress
                 if self._target_visit_timer > 30:  # After 1 second
                     recent_progress = max(0, self._last_distance - distance_to_target) if hasattr(self, '_last_distance') else 0
                     if recent_progress > 0.01:  # Actually moving toward target
-                        navigation_reward += 2.0 * target_type_multiplier  # Amplified 10x
+                        navigation_reward += 0.2 * target_type_multiplier  # **APPLY TARGET BONUS**
                 
                 self._last_distance = distance_to_target
             else:
@@ -965,9 +1066,8 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
             
             # ONLY advance target if actually reached
             if target_reached:
-                # JACKPOT: massive reward for reaching the target.
-                # 500 base, up to 1000 for land targets. Dwarfs any passive reward accumulation.
-                target_completion_reward = 500.0 * target_type_multiplier
+                # **MASSIVE REWARD** for reaching target (with type bonus)
+                target_completion_reward = 10.0 * target_type_multiplier  # **LAND TARGETS WORTH MORE**
                 navigation_reward += target_completion_reward
                 
                 # **ENHANCED**: Log target completion with environment info
@@ -1004,7 +1104,7 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                             tqdm.write(f"🏆 Phase targets completed! ({self._targets_reached} total targets)")
                         except ImportError:
                             pass  
-                    navigation_reward += 1000.0  # Full-phase completion jackpot
+                    navigation_reward += 20.0  
                     # Reset to first target for continuous cycling
                     self._current_target_index = 0
             
@@ -1021,11 +1121,11 @@ class ProgressiveSwimCrawl(swimmer.Swimmer):
                     if velocity_magnitude > 0.01:  # Only if actually moving
                         velocity_direction = current_velocity / velocity_magnitude
                         directional_alignment = np.dot(target_direction, velocity_direction)
-                        # Apply target type bonus to directional rewards too (10x amplified)
-                        navigation_reward += directional_alignment * 3.0 * target_type_multiplier
+                        # Apply target type bonus to directional rewards too
+                        navigation_reward += directional_alignment * 0.3 * target_type_multiplier
         
-        # **FINAL REWARD CALCULATION**: Navigation dominates, with diversity bonus and step penalty.
-        total_reward = base_reward * 0.1 + navigation_reward * 1.0 + environment_diversity_bonus * 0.1 + time_penalty
+        # **FINAL REWARD CALCULATION**: Navigation dominates, with diversity bonus, no penalties
+        total_reward = base_reward * 0.1 + navigation_reward * 1.0 + environment_diversity_bonus * 0.1 + baseline_activity_reward
         
         return total_reward
 
@@ -1053,6 +1153,12 @@ def progressive_swim_crawl(
     n_links=6,
     desired_speed=_SWIM_SPEED,
     training_progress=0.0,
+    expose_environment_observation=True,
+    expose_viscosity_observation=True,
+    anisotropic_drag_mode='off',
+    anisotropic_drag_ratio=10.0,
+    anisotropic_drag_gain=0.02,
+    anisotropic_drag_land_only=True,
     time_limit=swimmer._DEFAULT_TIME_LIMIT,
     random=None,
     environment_kwargs={},
@@ -1068,6 +1174,12 @@ def progressive_swim_crawl(
     task = ProgressiveSwimCrawl(
         desired_speed=desired_speed,
         training_progress=training_progress,
+        expose_environment_observation=expose_environment_observation,
+        expose_viscosity_observation=expose_viscosity_observation,
+        anisotropic_drag_mode=anisotropic_drag_mode,
+        anisotropic_drag_ratio=anisotropic_drag_ratio,
+        anisotropic_drag_gain=anisotropic_drag_gain,
+        anisotropic_drag_land_only=anisotropic_drag_land_only,
         random=random
     )
     
@@ -1082,7 +1194,10 @@ def progressive_swim_crawl(
 class ProgressiveMixedSwimmerEnv:
     """Progressive wrapper that manages training curriculum."""
     
-    def __init__(self, n_links=5, desired_speed=_SWIM_SPEED, time_limit=3000):
+    def __init__(self, n_links=5, desired_speed=_SWIM_SPEED, time_limit=3000,
+                 expose_environment_observation=True, expose_viscosity_observation=True,
+                 anisotropic_drag_mode='off', anisotropic_drag_ratio=10.0,
+                 anisotropic_drag_gain=0.02, anisotropic_drag_land_only=True):
         self.n_links = n_links
         self.desired_speed = desired_speed
         self.time_limit = time_limit
@@ -1090,6 +1205,12 @@ class ProgressiveMixedSwimmerEnv:
         self.total_episodes = 0
         self.target_episodes = 1000000  # 1M episodes for full curriculum
         self.manual_progress_override = False  # For testing purposes
+        self.expose_environment_observation = expose_environment_observation
+        self.expose_viscosity_observation = expose_viscosity_observation
+        self.anisotropic_drag_mode = anisotropic_drag_mode
+        self.anisotropic_drag_ratio = anisotropic_drag_ratio
+        self.anisotropic_drag_gain = anisotropic_drag_gain
+        self.anisotropic_drag_land_only = anisotropic_drag_land_only
         
         # Create initial environment
         self._create_environment()
@@ -1102,7 +1223,13 @@ class ProgressiveMixedSwimmerEnv:
             task_kwargs={
                 'random': 1, 
                 'n_links': self.n_links,
-                'training_progress': self.training_progress
+                'training_progress': self.training_progress,
+                'expose_environment_observation': self.expose_environment_observation,
+                'expose_viscosity_observation': self.expose_viscosity_observation,
+                'anisotropic_drag_mode': self.anisotropic_drag_mode,
+                'anisotropic_drag_ratio': self.anisotropic_drag_ratio,
+                'anisotropic_drag_gain': self.anisotropic_drag_gain,
+                'anisotropic_drag_land_only': self.anisotropic_drag_land_only
             }
         )
         self.physics = self.env.physics
@@ -1198,6 +1325,11 @@ class ProgressiveMixedSwimmerEnv:
         """Render the environment."""
         return self.physics.render(camera_id=0, height=height, width=width)
     
+    @property
+    def head_position(self):
+        """Get current swimmer head position."""
+        return self.physics.named.data.xpos['head'][:2].copy()
+
     def close(self):
         """Close the environment."""
         pass
@@ -1207,11 +1339,23 @@ class TonicProgressiveMixedWrapper(gym.Env):
     Gym wrapper for progressive mixed environment compatible with Tonic.
     """
     
-    def __init__(self, n_links=5, time_feature=True, desired_speed=_SWIM_SPEED):
+    def __init__(self, n_links=5, time_feature=True, desired_speed=_SWIM_SPEED,
+                 expose_environment_observation=True, expose_viscosity_observation=True,
+                 anisotropic_drag_mode='off', anisotropic_drag_ratio=10.0,
+                 anisotropic_drag_gain=0.02, anisotropic_drag_land_only=True):
         super().__init__()
         
         # Create the underlying environment
-        self.env = ProgressiveMixedSwimmerEnv(n_links=n_links, desired_speed=desired_speed)
+        self.env = ProgressiveMixedSwimmerEnv(
+            n_links=n_links,
+            desired_speed=desired_speed,
+            expose_environment_observation=expose_environment_observation,
+            expose_viscosity_observation=expose_viscosity_observation,
+            anisotropic_drag_mode=anisotropic_drag_mode,
+            anisotropic_drag_ratio=anisotropic_drag_ratio,
+            anisotropic_drag_gain=anisotropic_drag_gain,
+            anisotropic_drag_land_only=anisotropic_drag_land_only
+        )
         
         # Get action space from environment
         action_spec = self.env.action_spec
@@ -1362,6 +1506,11 @@ class TonicProgressiveMixedWrapper(gym.Env):
         progress = self.env.training_progress
         phase = int(progress * 4)
         return f"progressive-mixed-swimmer-{self.env.n_links}links-phase{phase}"
+
+    @property
+    def head_position(self):
+        """Get head position from underlying environment."""
+        return self.env.head_position
 
     @property 
     def training_progress(self):
