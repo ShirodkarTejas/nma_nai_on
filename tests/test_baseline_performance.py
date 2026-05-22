@@ -8,7 +8,7 @@ import numpy as np
 import time
 import os
 from swimmer.models.proper_ncap import ProperSwimmerModule, ProperSwimmerActor
-from swimmer.environments.mixed_environment import ImprovedMixedSwimmerEnv
+from swimmer.environments.mixed_environment import MixedSwimmerEnv
 from dm_control import suite
 import imageio
 
@@ -116,8 +116,8 @@ def test_proper_ncap_baseline():
             break
     
     # Save video
-    os.makedirs("outputs/baseline_test", exist_ok=True)
-    video_path = "outputs/baseline_test/proper_ncap_baseline.mp4"
+    os.makedirs("results/baseline_test", exist_ok=True)
+    video_path = "results/baseline_test/proper_ncap_baseline.mp4"
     imageio.mimsave(video_path, frames, fps=10)
     
     print(f"\n=== PROPER NCAP BASELINE RESULTS ===")

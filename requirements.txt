@@ -2,11 +2,11 @@
 torch>=2.0.0
 torchvision>=0.15.0
 torchaudio>=2.0.0
-# tensorflow>=2.16.0  # Optional, uncomment if needed for other components
+tensorflow==2.8.0
 
 # DeepMind Control Suite and RL
 dm-control>=1.0.16
-# dm-acme[envs]  # Incompatible with Python 3.12 (bsuite dependency)
+dm-acme[envs]
 
 # Scientific computing
 numpy<2.0
@@ -16,9 +16,7 @@ seaborn
 
 # Video and visualization
 ffmpeg
-imageio
 imageio-ffmpeg
-gym==0.26.2
 ipywidgets
 opencv-python-headless
 

@@ -8,7 +8,7 @@ import numpy as np
 import time
 import os
 from swimmer.models.ncap_swimmer import NCAPSwimmer, NCAPSwimmerActor
-from swimmer.environments.mixed_environment import ImprovedMixedSwimmerEnv
+from swimmer.environments.mixed_environment import MixedSwimmerEnv
 
 def test_pure_ncap_performance():
     """Test pure NCAP without environment adaptations."""
@@ -34,7 +34,7 @@ def test_pure_ncap_performance():
     print("\n=== TESTING IN MIXED ENVIRONMENT ===")
     
     # Create environment with 6 links (5 joints)
-    env = ImprovedMixedSwimmerEnv(n_links=6)
+    env = MixedSwimmerEnv(n_links=6)
     env.reset()
     
     def test_ncap_model(ncap_model, name):

@@ -23,7 +23,7 @@ def test_trained_vs_untrained():
     # Load trained model  
     try:
         trained = SimpleNCAPSwimmer(n_joints=5)
-        checkpoint = torch.load('outputs/training/improved_ncap_5links.pt', map_location='cpu')
+        checkpoint = torch.load('results/training/base_ncap_5links.pt', map_location='cpu')
         
         # Extract NCAP parameters from checkpoint
         ncap_params = {}
@@ -113,8 +113,8 @@ def test_trained_vs_untrained():
     axes[1].grid(True)
     
     plt.tight_layout()
-    plt.savefig('outputs/trained_vs_untrained_comparison.png', dpi=150, bbox_inches='tight')
-    print("📊 Comparison plot saved to 'outputs/trained_vs_untrained_comparison.png'")
+    plt.savefig('results/trained_vs_untrained_comparison.png', dpi=150, bbox_inches='tight')
+    print("📊 Comparison plot saved to 'results/trained_vs_untrained_comparison.png'")
 
 
 if __name__ == "__main__":

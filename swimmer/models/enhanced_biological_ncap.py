@@ -55,84 +55,86 @@ class RelaxationOscillator(nn.Module):
     def forward(self, timestep, goal_bias=0.0, environment_factor=1.0):
         """
         Generate relaxation oscillator pattern with goal-directed modulation.
-        Stateless implementation for batch/DataParallel compatibility.
+        
+        Args:
+            timestep: Current simulation timestep
+            goal_bias: Goal-directed bias [-1, 1] (negative = turn left, positive = turn right)
+            environment_factor: Environment frequency scaling [0.2, 3.0]
+        
+        Returns:
+            tuple: (dorsal_activity, ventral_activity) in [0, 1] range
         """
-        if not isinstance(timestep, torch.Tensor):
-            timestep = torch.tensor(timestep, dtype=torch.float32, device=self.dorsal_threshold.device)
-        
-        # Ensure goal_bias and environment_factor are tensors of correct shape
-        if not isinstance(goal_bias, torch.Tensor):
-            goal_bias = torch.tensor(goal_bias, dtype=torch.float32, device=timestep.device)
-        if not isinstance(environment_factor, torch.Tensor):
-            environment_factor = torch.tensor(environment_factor, dtype=torch.float32, device=timestep.device)
-            
-        # Reshape to match timestep batch if necessary (Handling both scalar and batched tensors)
-        if goal_bias.dim() > 0: goal_bias = goal_bias.view_as(timestep)
-        elif goal_bias.dim() == 0: goal_bias = goal_bias.expand_as(timestep)
-        
-        if environment_factor.dim() > 0: environment_factor = environment_factor.view_as(timestep)
-        elif environment_factor.dim() == 0: environment_factor = environment_factor.expand_as(timestep)
+        def to_scalar(x):
+            return x.detach().item() if isinstance(x, torch.Tensor) else float(x)
 
-        # Apply environmental frequency scaling
-        effective_period = self.base_period / (environment_factor + 1e-8)
+        # Apply environmental frequency scaling (dramatic changes like real C. elegans)
+        effective_period = self.base_period / environment_factor
         
         # Calculate asymmetric phase durations
         dorsal_duration = effective_period * self.asymmetry_ratio
         ventral_duration = effective_period * (1.0 - self.asymmetry_ratio)
         
         # Determine current phase position
-        cycle_position = timestep % effective_period
+        cycle_position = (timestep % effective_period)
         
-        # Determine current phase masks
-        dorsal_mask = cycle_position < dorsal_duration
-        ventral_mask = ~dorsal_mask
+        if cycle_position < dorsal_duration:
+            # Dorsal phase (gradual rise)
+            phase_progress = cycle_position / dorsal_duration
+            
+            # Gradual rise with MINIMAL goal-directed bias (FIXED: reduced from strong bias)
+            target_dorsal = 1.0 + max(0.0, goal_bias) * 0.1  # REDUCED bias effect to 10%
+            self.dorsal_activity = min(1.0, phase_progress * target_dorsal)
+            
+            # Rapid fall for ventral
+            self.ventral_activity = max(0.0, to_scalar(self.ventral_activity) - to_scalar(self.ventral_fall_rate))
+            
+        else:
+            # Ventral phase (faster rise)
+            phase_progress = (cycle_position - dorsal_duration) / ventral_duration
+            
+            # Faster rise with MINIMAL goal-directed bias (FIXED: reduced from strong bias)
+            target_ventral = 1.0 + max(0.0, -goal_bias) * 0.1  # REDUCED bias effect to 10%
+            self.ventral_activity = min(1.0, phase_progress * target_ventral)
+            
+            # Rapid fall for dorsal
+            self.dorsal_activity = max(0.0, to_scalar(self.dorsal_activity) - to_scalar(self.dorsal_fall_rate))
         
-        # --- Dorsal Phase Dynamics ---
-        # Gradual rise for dorsal
-        phase_progress_d = cycle_position / (dorsal_duration + 1e-8)
-        target_dorsal = 1.0 + goal_bias.clamp(min=0.0) * 0.1
-        activity_d_rise = (phase_progress_d * target_dorsal).clamp(0, 1)
+        # Apply proprioceptive threshold switching (prevents getting stuck)
+        dorsal_threshold_val = float(torch.clamp(self.dorsal_threshold, 0.6, 0.9).detach().item())
+        ventral_threshold_val = float(torch.clamp(self.ventral_threshold, 0.6, 0.9).detach().item())
+
+        if to_scalar(self.dorsal_activity) > dorsal_threshold_val:
+            self.ventral_activity = min(1.0, to_scalar(self.ventral_activity) + 0.05)
         
-        # Rapid fall for ventral (stateless approximation)
-        # It fell from 1.0 starting at the beginning of the dorsal phase
-        activity_v_fall = (1.0 - self.ventral_fall_rate * cycle_position).clamp(0, 1)
+        if to_scalar(self.ventral_activity) > ventral_threshold_val:
+            self.dorsal_activity = min(1.0, to_scalar(self.dorsal_activity) + 0.05)
         
-        # --- Ventral Phase Dynamics ---
-        # Gradual rise for ventral
-        cycle_pos_v = cycle_position - dorsal_duration
-        phase_progress_v = cycle_pos_v / (ventral_duration + 1e-8)
-        target_ventral = 1.0 + (-goal_bias).clamp(min=0.0) * 0.1
-        activity_v_rise = (phase_progress_v * target_ventral).clamp(0, 1)
+        # Convert to tensor with proper device handling
+        dorsal_tensor = torch.tensor(to_scalar(self.dorsal_activity), dtype=torch.float32)
+        ventral_tensor = torch.tensor(to_scalar(self.ventral_activity), dtype=torch.float32)
         
-        # Rapid fall for dorsal (stateless approximation)
-        activity_d_fall = (1.0 - self.dorsal_fall_rate * cycle_pos_v).clamp(0, 1)
-        
-        # Combine using masks
-        dorsal_activity = torch.where(dorsal_mask, activity_d_rise, activity_d_fall)
-        ventral_activity = torch.where(ventral_mask, activity_v_rise, activity_v_fall)
-        
-        # Apply proprioceptive threshold switching effects (simplified stateless version)
-        # If one is very high, it slightly boosts the other (coupling)
-        d_thresh = self.dorsal_threshold.clamp(0.6, 0.9)
-        v_thresh = self.ventral_threshold.clamp(0.6, 0.9)
-        
-        dorsal_boosted = torch.where(ventral_activity > v_thresh, (dorsal_activity + 0.05).clamp(0, 1), dorsal_activity)
-        ventral_boosted = torch.where(dorsal_activity > d_thresh, (ventral_activity + 0.05).clamp(0, 1), ventral_activity)
-        
-        return dorsal_boosted, ventral_boosted
+        return torch.clamp(dorsal_tensor, 0, 1), torch.clamp(ventral_tensor, 0, 1)
 
 class EnhancedBiologicalNCAPSwimmer(nn.Module):
     """
     Enhanced Biological NCAP with relaxation oscillators and goal-directed navigation.
     
     Improvements over basic NCAP:
-    1. Asymmetric relaxation oscillators (70/30 phase split)
-    2. Goal-directed sensory input integration  
-    3. Dramatic frequency adaptation (3-5x changes)
-    4. Proprioceptive threshold switching
-    5. Target-seeking behavior
-    6. **NEW**: Locomotion-only mode for interference-free training
+    1. Asymmetric relaxation oscillators (60/40 phase split per eLife 2021)
+    2. Traveling-wave phase delays across posterior joints (anti-tail-chasing)
+    3. Goal-directed sensory input integration (disabled in locomotion_only_mode)
+    4. Dramatic frequency adaptation (3–5× like real C. elegans)
+    5. Proprioceptive threshold switching
+
+    Connectome-prior support (call ``configure_sparse_priors()`` after construction):
+    - ``_sparse_prior_scalars``: dict of syn_* and dist_* from Cook 2019
+    - ``compute_topological_prior_loss(lambda_val)``: λ × Σ dist_p × ||w_p||²
     """
+
+    # Inherits the same pathway→parameter mapping as BiologicalNCAPSwimmer.
+    from .biological_ncap import BiologicalNCAPSwimmer as _Bio
+    _PATHWAY_PARAM_MAP = _Bio._PATHWAY_PARAM_MAP
+    del _Bio
     
     def __init__(self, n_joints, oscillator_period=60,
                  use_weight_sharing=True, use_weight_constraints=True,
@@ -193,7 +195,7 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
                     self.params[f'bneuron_d_prop_{i}'] = exc_param()
                     self.params[f'bneuron_v_prop_{i}'] = exc_param()
                 
-                if self.include_head_oscillators and i == 0:
+                if self.include_head_oscillators:
                     self.params[f'bneuron_d_osc_{i}'] = exc_param()
                     self.params[f'bneuron_v_osc_{i}'] = exc_param()
                 
@@ -214,22 +216,72 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
             
             print(f"✅ Enhanced biological adaptation with dramatic frequency changes")
         
+        # Goal parameters must always exist so curriculum can enable
+        # include_goal_direction at runtime without missing attributes.
+        self.goal_sensitivity = nn.Parameter(torch.tensor(0.3))          # How much goals affect oscillator
+        self.goal_persistence = nn.Parameter(torch.tensor(0.1))          # How long goal bias persists
+        self.directional_bias = 0.0  # Current goal-directed bias
+
         # **GOAL-DIRECTED NAVIGATION** (disabled in locomotion_only_mode)
         if self.include_goal_direction:
-            # Goal-directed bias parameters (like chemotaxis in C. elegans)
-            self.goal_sensitivity = nn.Parameter(torch.tensor(0.3))          # How much goals affect oscillator
-            self.goal_persistence = nn.Parameter(torch.tensor(0.1))          # How long goal bias persists
-            self.directional_bias = 0.0  # Current goal-directed bias
-            
             print(f"✅ Goal-directed navigation with sensory-motor integration")
         elif self.locomotion_only_mode:
             print(f"🏊 LOCOMOTION-ONLY MODE: Goal-directed navigation DISABLED for pure swimming training")
         
+        # Connectome sparse-prior storage (populated by configure_sparse_priors())
+        self._sparse_prior_scalars: dict = {}
+
         # Move to device
         self.to(self._device)
         if self._device.type == 'cuda':
             print(f"Enhanced Biological NCAP model on GPU: {next(self.parameters()).device}")
-    
+
+    # ------------------------------------------------------------------
+    # Connectome-prior API  (mirrors BiologicalNCAPSwimmer)
+    # ------------------------------------------------------------------
+
+    def configure_sparse_priors(self, scalars: dict) -> None:
+        """Store Cook-2019-derived prior scalars.  See BiologicalNCAPSwimmer."""
+        self._sparse_prior_scalars = {k: float(v) for k, v in scalars.items()}
+
+    def _iter_pathway_params(self, pathway: str):
+        """Yield parameters belonging to *pathway*."""
+        if not hasattr(self, "params"):
+            return
+        exc_prefixes, inh_prefixes = self._PATHWAY_PARAM_MAP.get(pathway, ((), ()))
+        for name, param in self.params.items():
+            for prefix in exc_prefixes:
+                if name.startswith(prefix) or name == prefix:
+                    yield param
+                    break
+            else:
+                for prefix in inh_prefixes:
+                    if name.startswith(prefix) or name == prefix:
+                        yield param
+                        break
+
+    def compute_topological_prior_loss(self, lambda_val: float) -> torch.Tensor:
+        """Topological L2 regularisation: λ × Σ dist_p × ||w_p||².
+
+        See BiologicalNCAPSwimmer.compute_topological_prior_loss for details.
+        """
+        device = next(self.parameters()).device
+        zero = torch.zeros((), device=device, dtype=torch.float32)
+        if lambda_val <= 0.0 or not self._sparse_prior_scalars:
+            return zero
+
+        total = zero.clone()
+        for pathway in self._PATHWAY_PARAM_MAP:
+            dist = float(self._sparse_prior_scalars.get(f"dist_{pathway}", 1.0))
+            terms = [
+                (p ** 2).sum()
+                for p in self._iter_pathway_params(pathway)
+            ]
+            if terms:
+                total = total + dist * torch.stack(terms).sum()
+
+        return lambda_val * total
+
     def reset(self):
         """Reset timestep and oscillator state."""
         self.timestep = 0
@@ -312,84 +364,107 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
         
         if environment_type is not None and self.include_environment_adaptation:
             try:
-                # Batched environment adaptation
-                env_tensor = torch.as_tensor(environment_type, device=joint_pos.device, dtype=torch.float32)
-                if env_tensor.dim() == 1:
-                    env_tensor = env_tensor.unsqueeze(0).expand(joint_pos.shape[0], -1)
-                env_tensor = torch.nan_to_num(env_tensor, nan=0.0, posinf=1.0, neginf=0.0)
+                # Robust unpacking - handle different environment_type formats (FIXED: handle tensors)
+                if isinstance(environment_type, torch.Tensor):
+                    # Convert tensor to numpy array first, then to list for safe unpacking
+                    env_array = environment_type.detach().cpu().numpy()
+                    if env_array.ndim > 1:
+                        env_array = env_array.flatten()  # Flatten if multidimensional
+                    env_values = env_array.tolist()
+                    
+                    if len(env_values) >= 3:
+                        water_flag, land_flag, viscosity_norm = float(env_values[0]), float(env_values[1]), float(env_values[2])
+                    elif len(env_values) == 2:
+                        water_flag, land_flag = float(env_values[0]), float(env_values[1])
+                        viscosity_norm = 0.1  # Default viscosity
+                    else:
+                        water_flag = float(env_values[0]) if env_values else 1.0
+                        land_flag = 1.0 - water_flag
+                        viscosity_norm = 0.1  # Default viscosity
+                        
+                elif hasattr(environment_type, '__len__') and len(environment_type) >= 3:
+                    water_flag, land_flag, viscosity_norm = float(environment_type[0]), float(environment_type[1]), float(environment_type[2])
+                elif hasattr(environment_type, '__len__') and len(environment_type) == 2:
+                    water_flag, land_flag = float(environment_type[0]), float(environment_type[1])
+                    viscosity_norm = 0.1  # Default viscosity
+                elif hasattr(environment_type, '__len__') and len(environment_type) == 1:
+                    # Single value - assume it's water_flag
+                    water_flag = float(environment_type[0])
+                    land_flag = 1.0 - water_flag
+                    viscosity_norm = 0.1  # Default viscosity
+                else:
+                    # Scalar value
+                    water_flag = float(environment_type)
+                    land_flag = 1.0 - water_flag
+                    viscosity_norm = 0.1  # Default viscosity
                 
-                water_flag = env_tensor[:, 0]
-                land_flag = env_tensor[:, 1]
-                viscosity_norm = env_tensor[:, 2] if env_tensor.shape[1] >= 3 else torch.zeros_like(water_flag) + 0.1
-                viscosity_norm = torch.nan_to_num(viscosity_norm, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+                # FIXED: Handle tensor boolean properly
+                if isinstance(land_flag, torch.Tensor):
+                    land_flag_value = float(land_flag.item())
+                elif isinstance(land_flag, (list, tuple)):
+                    land_flag_value = float(land_flag[0])
+                else:
+                    land_flag_value = float(land_flag)
                 
-                # Use masks for adaptation scaling
-                land_mask = land_flag > 0.5
-                frequency_scale = torch.where(land_mask, self.land_frequency_scale, self.water_frequency_scale)
-                amplitude_scale = torch.where(land_mask, self.land_amplitude_scale, self.water_amplitude_scale)
-                environment_modulation = torch.where(land_mask, -0.1, 0.1)
+                if land_flag_value > 0.5:  # In land environment
+                    frequency_scale = self.land_frequency_scale.item()    # Much slower (0.5x)
+                    amplitude_scale = self.land_amplitude_scale.item()    # Reduced amplitude
+                    environment_modulation = -0.1  # Inhibitory modulation
+                else:  # In water environment
+                    frequency_scale = self.water_frequency_scale.item()   # Much faster (2.5x)
+                    amplitude_scale = self.water_amplitude_scale.item()   # Increased amplitude  
+                    environment_modulation = 0.1   # Excitatory modulation
                 
                 # Additional viscosity-based scaling
-                amplitude_scale = amplitude_scale * (1.0 + 0.5 * viscosity_norm)
+                amplitude_scale *= (1.0 + 0.5 * viscosity_norm)  # More force in thick fluid
                 
             except Exception as e:
                 print(f"Warning: Enhanced biological adaptation failed: {e}")
-                amplitude_scale = torch.ones(joint_pos.shape[0], device=joint_pos.device)
-                frequency_scale = torch.ones(joint_pos.shape[0], device=joint_pos.device)
-                environment_modulation = torch.zeros(joint_pos.shape[0], device=joint_pos.device)
-        else:
-            amplitude_scale = torch.ones(joint_pos.shape[0], device=joint_pos.device)
-            frequency_scale = torch.ones(joint_pos.shape[0], device=joint_pos.device)
-            environment_modulation = torch.zeros(joint_pos.shape[0], device=joint_pos.device)
+                amplitude_scale = 1.0
+                frequency_scale = 1.0
+                environment_modulation = 0.0
         
-        # **GOAL-DIRECTED NAVIGATION** - Batched implementation
-        goal_bias = torch.zeros(joint_pos.shape[0], device=joint_pos.device)
+        # **GOAL-DIRECTED NAVIGATION** (new sensory-motor integration) - FIXED: reduced intensity
+        goal_bias = 0.0
         if target_direction is not None and self.include_goal_direction:
             try:
-                target_tensor = torch.as_tensor(target_direction, device=joint_pos.device, dtype=torch.float32)
-                if target_tensor.dim() == 1:
-                    target_tensor = target_tensor.unsqueeze(0).expand(joint_pos.shape[0], -1)
-                target_tensor = torch.nan_to_num(target_tensor, nan=0.0, posinf=0.0, neginf=0.0)
-                
-                target_x = target_tensor[:, 0]
-                
-                # Lateral bias from target
-                lateral_bias = target_x * self.goal_sensitivity * 0.1
-                
-                # For batched operations, ensure directional_bias is a tensor
-                if not isinstance(self.directional_bias, torch.Tensor):
-                    self.directional_bias = torch.zeros_like(lateral_bias)
-                
-                # Reshape directional_bias if batch size changed
-                if self.directional_bias.shape != lateral_bias.shape:
-                    self.directional_bias = torch.zeros_like(lateral_bias)
+                # Convert target direction to goal bias for oscillator - FIXED: handle tensors
+                if isinstance(target_direction, torch.Tensor):
+                    target_values = target_direction.detach().cpu().numpy().tolist()
+                    if len(target_values) >= 2:
+                        target_x, target_y = target_values[:2]
+                    else:
+                        target_x = target_values[0] if target_values else 0.0
+                        target_y = 0.0
                 else:
-                    # Break graph history and sanitize persistent state each forward.
-                    self.directional_bias = torch.nan_to_num(
-                        self.directional_bias.detach(),
-                        nan=0.0,
-                        posinf=0.0,
-                        neginf=0.0
-                    )
+                    target_x, target_y = target_direction[:2]
                 
-                self.directional_bias = (self.directional_bias * (1.0 - self.goal_persistence) + 
-                                       lateral_bias * self.goal_persistence)
-                goal_bias = self.directional_bias.clamp(-0.1, 0.1)
+                # FIXED: Much smaller lateral bias to prevent tail-chasing
+                lateral_bias = target_x * self.goal_sensitivity.item() * 0.1  # REDUCED by 10x
+                
+                # Update directional bias with persistence (like working memory)
+                self.directional_bias = (self.directional_bias * (1.0 - self.goal_persistence.item()) + 
+                                       lateral_bias * self.goal_persistence.item())
+                # FIXED: Proper tensor construction - avoid torch.tensor() warning
+                if isinstance(self.directional_bias, torch.Tensor):
+                    goal_bias = torch.clamp(self.directional_bias.clone().detach(), -0.1, 0.1).item()
+                else:
+                    goal_bias = max(-0.1, min(0.1, float(self.directional_bias)))
                 
             except Exception as e:
-                print(f"Warning: Goal-directed navigation failed: {e}")
-                goal_bias = torch.zeros(joint_pos.shape[0], device=joint_pos.device)
+                goal_bias = 0.0
         
-        # **BIOLOGICAL RELAXATION OSCILLATOR** (key improvement) - Batched implementation
+        # **BIOLOGICAL RELAXATION OSCILLATOR** (key improvement) - FIXED: reduced goal bias
         if self.include_head_oscillators:
             oscillator_d, oscillator_v = self.relaxation_oscillator(
-                timesteps,
+                timesteps.item() if timesteps.numel() == 1 else timesteps[0].item(),
                 goal_bias=goal_bias * 0.5,  # FURTHER REDUCED goal bias effect
                 environment_factor=frequency_scale
             )
-            # Relaxation oscillator already returns tensors on correct device
+            oscillator_d = oscillator_d.to(self._device)
+            oscillator_v = oscillator_v.to(self._device)
         else:
-            oscillator_d = oscillator_v = torch.zeros_like(timesteps)
+            oscillator_d = oscillator_v = torch.tensor(0.0, device=self._device)
         
         # Normalize joint positions to [-1, 1] (proper NCAP input range)
         joint_limit = 2 * np.pi / (self.n_joints + 1)  # As in notebook
@@ -417,8 +492,8 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
                 
                 # **ENHANCED ADAPTATION**: Modulate proprioception by environment and goals
                 if self.include_environment_adaptation:
-                    prop_strength_d = prop_strength_d * (1.0 + environment_modulation.unsqueeze(-1))
-                    prop_strength_v = prop_strength_v * (1.0 + environment_modulation.unsqueeze(-1))
+                    prop_strength_d = prop_strength_d * (1.0 + environment_modulation)
+                    prop_strength_v = prop_strength_v * (1.0 + environment_modulation)
                 
                 bneuron_d = bneuron_d + joint_pos_d[..., i-1, None] * prop_strength_d
                 bneuron_v = bneuron_v + joint_pos_v[..., i-1, None] * prop_strength_v
@@ -430,37 +505,38 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
                 
                 # **ENHANCED ADAPTATION**: Environment and goal modulation
                 if self.include_environment_adaptation:
-                    osc_strength_d = osc_strength_d * (1.0 + environment_modulation.unsqueeze(-1))
-                    osc_strength_v = osc_strength_v * (1.0 + environment_modulation.unsqueeze(-1))
+                    osc_strength_d = osc_strength_d * (1.0 + environment_modulation)
+                    osc_strength_v = osc_strength_v * (1.0 + environment_modulation)
                 
-                bneuron_d = bneuron_d + oscillator_d.unsqueeze(-1) * osc_strength_d
-                bneuron_v = bneuron_v + oscillator_v.unsqueeze(-1) * osc_strength_v
+                bneuron_d = bneuron_d + oscillator_d * osc_strength_d
+                bneuron_v = bneuron_v + oscillator_v * osc_strength_v
             
             # **TRAVELING WAVE PATTERN**: Create phase delays for posterior joints (ANTI-TAIL-CHASING)
             elif self.include_head_oscillators and i > 0:
                 # Calculate phase delay for traveling wave (key anti-tail-chasing mechanism)
                 phase_delay = i * 15  # 15 steps delay between adjacent joints (like original NCAP)
-                delayed_timestep = (timesteps - phase_delay).clamp(min=0)
+                delayed_timestep = max(0, (timesteps.item() if timesteps.numel() == 1 else timesteps[0].item()) - phase_delay)
                 
                 # Generate delayed oscillator pattern for this joint
-                # Pass frequency_scale as tensor if it's already one
                 delayed_oscillator_d, delayed_oscillator_v = self.relaxation_oscillator(
                     delayed_timestep,
                     goal_bias=0.0,  # No goal bias on posterior joints - PREVENTS TAIL-CHASING
                     environment_factor=frequency_scale
                 )
+                delayed_oscillator_d = delayed_oscillator_d.to(self._device)
+                delayed_oscillator_v = delayed_oscillator_v.to(self._device)
                 
                 osc_strength_d = exc(self.params[ws(f'bneuron_d_osc_{i}', 'bneuron_osc')])
                 osc_strength_v = exc(self.params[ws(f'bneuron_v_osc_{i}', 'bneuron_osc')])
                 
                 # **ENHANCED ADAPTATION**: Environment modulation only (no goal bias)
                 if self.include_environment_adaptation:
-                    osc_strength_d = osc_strength_d * (1.0 + environment_modulation.unsqueeze(-1))
-                    osc_strength_v = osc_strength_v * (1.0 + environment_modulation.unsqueeze(-1))
+                    osc_strength_d = osc_strength_d * (1.0 + environment_modulation)
+                    osc_strength_v = osc_strength_v * (1.0 + environment_modulation)
                 
                 # Apply delayed oscillator pattern - creates traveling wave
-                bneuron_d = bneuron_d + delayed_oscillator_d.unsqueeze(-1) * osc_strength_d * 0.8  # Slightly reduced strength
-                bneuron_v = bneuron_v + delayed_oscillator_v.unsqueeze(-1) * osc_strength_v * 0.8  # Slightly reduced strength
+                bneuron_d = bneuron_d + delayed_oscillator_d * osc_strength_d * 0.8  # Slightly reduced strength
+                bneuron_v = bneuron_v + delayed_oscillator_v * osc_strength_v * 0.8  # Slightly reduced strength
             
             # 3. B-NEURON ACTIVATION (key biological constraint)
             bneuron_d = graded(bneuron_d)  # Clamp to [0, 1]
@@ -472,16 +548,16 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
             
             # **ENHANCED ADAPTATION**: Environment affects muscle activation strength
             if self.include_environment_adaptation:
-                muscle_ipsi_strength = muscle_ipsi_strength * (1.0 + environment_modulation.unsqueeze(-1))
-                muscle_contra_strength = muscle_contra_strength * (1.0 + environment_modulation.unsqueeze(-1))
+                muscle_ipsi_strength = muscle_ipsi_strength * (1.0 + environment_modulation)
+                muscle_contra_strength = muscle_contra_strength * (1.0 + environment_modulation)
             
             muscle_d = graded(
                 bneuron_d * muscle_ipsi_strength +
                 bneuron_v * muscle_contra_strength
             )
             muscle_v = graded(
-                bneuron_v * exc(self.params[ws(f'muscle_v_v_{i}', 'muscle_ipsi')]) * (1.0 + environment_modulation.unsqueeze(-1) if self.include_environment_adaptation else 1.0) +
-                bneuron_d * inh(self.params[ws(f'muscle_v_d_{i}', 'muscle_contra')]) * (1.0 + environment_modulation.unsqueeze(-1) if self.include_environment_adaptation else 1.0)
+                bneuron_v * exc(self.params[ws(f'muscle_v_v_{i}', 'muscle_ipsi')]) * (1.0 + environment_modulation if self.include_environment_adaptation else 1.0) +
+                bneuron_d * inh(self.params[ws(f'muscle_v_d_{i}', 'muscle_contra')]) * (1.0 + environment_modulation if self.include_environment_adaptation else 1.0)
             )
             
             # 5. JOINT TORQUE: Antagonistic muscle contraction (KEY OUTPUT COMPUTATION)
@@ -492,8 +568,7 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
         base_torques = torch.cat(joint_torques, -1)
         
         # **ENHANCED BIOLOGICAL AMPLITUDE SCALING**
-        final_torques = base_torques * amplitude_scale.unsqueeze(-1)
-        final_torques = torch.nan_to_num(final_torques, nan=0.0, posinf=0.0, neginf=0.0)
+        final_torques = base_torques * amplitude_scale
         
         # 6. FINAL BOUNDS (ensure biological range is maintained)
         final_torques = torch.clamp(final_torques, -1.0, 1.0)
@@ -501,10 +576,11 @@ class EnhancedBiologicalNCAPSwimmer(nn.Module):
         # **NEW**: Apply action scaling for stronger swimming after normalization
         final_torques = final_torques * self.action_scaling_factor
         
-        # Add small exploration noise during training
+        # Exploration noise: 0.1 std is the minimum useful magnitude for REINFORCE
+        # to produce varied trajectories. 0.02 was too small — the policy was near-
+        # deterministic, giving near-zero gradient variance across episodes.
         if self.training:
-            final_torques = final_torques + 0.02 * torch.randn_like(final_torques)  # REDUCED noise
-            final_torques = torch.nan_to_num(final_torques, nan=0.0, posinf=0.0, neginf=0.0)
+            final_torques = final_torques + 0.1 * torch.randn_like(final_torques)
         
         # **SAFETY CHECKS** (like original biological NCAP)
         if torch.isnan(final_torques).any():

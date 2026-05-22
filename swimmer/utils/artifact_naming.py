@@ -51,7 +51,7 @@ class ArtifactNamer:
         
         return base
     
-    def checkpoint_name(self, step: int, base_dir: str = "outputs/training/checkpoints", 
+    def checkpoint_name(self, step: int, base_dir: str = "results/training/checkpoints", 
                        use_model_subfolder: bool = True) -> str:
         """Generate checkpoint filename with optional model-specific subfolder."""
         if use_model_subfolder:
@@ -62,7 +62,7 @@ class ArtifactNamer:
             os.makedirs(base_dir, exist_ok=True)
             return os.path.join(base_dir, f"{self.base_id}_checkpoint_step_{step}.pt")
     
-    def final_model_name(self, base_dir: str = "outputs/training/models", 
+    def final_model_name(self, base_dir: str = "results/training/models", 
                         use_model_subfolder: bool = True) -> str:
         """Generate final model filename with optional model-specific subfolder."""
         if use_model_subfolder:
@@ -75,7 +75,7 @@ class ArtifactNamer:
     
     def evaluation_video_name(self, step: Optional[int] = None, 
                             evaluation_type: str = "mixed_env",
-                            base_dir: str = "outputs/evaluation/videos",
+                            base_dir: str = "results/evaluation/videos",
                             use_model_subfolder: bool = True) -> str:
         """Generate evaluation video filename with optional model-specific subfolder."""
         if use_model_subfolder:
@@ -94,7 +94,7 @@ class ArtifactNamer:
         return os.path.join(target_dir, filename)
     
     def training_video_name(self, step: int, phase: Optional[str] = None,
-                          base_dir: str = "outputs/training/videos",
+                          base_dir: str = "results/training/videos",
                           use_model_subfolder: bool = True) -> str:
         """Generate training progress video filename with optional model-specific subfolder."""
         if use_model_subfolder:
@@ -114,7 +114,7 @@ class ArtifactNamer:
     
     def analysis_plot_name(self, analysis_type: str, step: Optional[int] = None,
                          phase: Optional[str] = None,
-                         base_dir: str = "outputs/analysis/plots",
+                         base_dir: str = "results/analysis/plots",
                          use_model_subfolder: bool = True) -> str:
         """Generate analysis plot filename with optional model-specific subfolder."""
         if use_model_subfolder:
@@ -135,7 +135,7 @@ class ArtifactNamer:
         filename = "_".join(filename_parts) + ".png"
         return os.path.join(target_dir, filename)
     
-    def training_log_dir(self, base_dir: str = "outputs/training/logs",
+    def training_log_dir(self, base_dir: str = "results/training/logs",
                         use_model_subfolder: bool = True) -> str:
         """Generate training log directory with optional model-specific subfolder."""
         if use_model_subfolder:
@@ -148,7 +148,7 @@ class ArtifactNamer:
         return log_dir
     
     def comparison_name(self, other_model_type: str, comparison_type: str = "performance",
-                       base_dir: str = "outputs/comparisons") -> str:
+                       base_dir: str = "results/comparisons") -> str:
         """Generate comparison artifact name between models."""
         os.makedirs(base_dir, exist_ok=True)
         
@@ -160,7 +160,7 @@ class ArtifactNamer:
     
     def curriculum_name(self, curriculum_phase: int, artifact_type: str = "checkpoint",
                        step: Optional[int] = None,
-                       base_dir: str = "outputs/curriculum") -> str:
+                       base_dir: str = "results/curriculum") -> str:
         """Generate curriculum training artifact name."""
         phase_names = ["swimming", "single_land", "two_lands", "full_complexity"]
         phase_name = phase_names[min(curriculum_phase, len(phase_names) - 1)]
@@ -180,7 +180,7 @@ class ArtifactNamer:
         return os.path.join(subdir, filename)
     
     def timestamped_name(self, base_name: str, extension: str = "",
-                        base_dir: str = "outputs/timestamped") -> str:
+                        base_dir: str = "results/timestamped") -> str:
         """Generate timestamped filename for unique artifacts."""
         os.makedirs(base_dir, exist_ok=True)
         
@@ -192,7 +192,7 @@ class ArtifactNamer:
         
         return os.path.join(base_dir, filename)
     
-    def experiment_summary_name(self, base_dir: str = "outputs/summaries",
+    def experiment_summary_name(self, base_dir: str = "results/summaries",
                                use_model_subfolder: bool = True) -> str:
         """Generate experiment summary filename with optional model-specific subfolder."""
         if use_model_subfolder:
@@ -312,7 +312,7 @@ if __name__ == "__main__":
     print(f"\n🗂️ Testing organized folder structure:")
     enhanced_namer = ArtifactNamer("enhanced_ncap", 5, "ppo")
     folders = enhanced_namer.create_organized_folder_structure()
-    print(f"   Model folders created under: outputs/{enhanced_namer.model_type}/")
+    print(f"   Model folders created under: results/{enhanced_namer.model_type}/")
     for folder_type, path in folders.items():
         print(f"     {folder_type}: {os.path.basename(path)}")
     

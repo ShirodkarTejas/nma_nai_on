@@ -8,7 +8,7 @@ import numpy as np
 import time
 import os
 from swimmer.models.ncap_swimmer import NCAPSwimmer, NCAPSwimmerActor
-from swimmer.environments.mixed_environment import ImprovedMixedSwimmerEnv
+from swimmer.environments.mixed_environment import MixedSwimmerEnv
 
 def test_quick_duration():
     """Quick test with longer duration."""
@@ -17,7 +17,7 @@ def test_quick_duration():
     # Test one configuration with more steps
     config = {'period': 60, 'steps': 5000, 'name': 'Long duration test'}
     
-    env = ImprovedMixedSwimmerEnv(n_links=6)
+    env = MixedSwimmerEnv(n_links=6)
     
     print(f"Testing {config['name']}...")
     

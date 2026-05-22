@@ -86,7 +86,7 @@ def test_trained_land_escape():
     env = ProgressiveMixedSwimmerEnv(n_links=5, time_limit=3000)
     
     # Model path - use the checkpoint specified by user
-    model_path = "outputs/curriculum_training/checkpoints/enhanced_ncap/40000.pt"
+    model_path = "results/curriculum_training/checkpoints/enhanced_ncap/40000.pt"
     
     # Test zones - using sizes where random agent succeeded
     test_zones = [

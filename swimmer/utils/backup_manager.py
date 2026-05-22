@@ -16,7 +16,7 @@ class BackupManager:
     Manages automatic backups and recovery for long training sessions.
     """
     
-    def __init__(self, experiment_name, backup_dir='outputs/backups', max_backups=5):
+    def __init__(self, experiment_name, backup_dir='results/backups', max_backups=5):
         self.experiment_name = experiment_name
         self.backup_dir = backup_dir
         self.max_backups = max_backups

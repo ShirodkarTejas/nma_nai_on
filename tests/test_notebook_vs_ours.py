@@ -246,8 +246,8 @@ def test_swimming_in_environment(model, env_type):
         
     elif env_type == "complex":
         # Create our complex environment
-        from swimmer.environments.mixed_environment import ImprovedMixedSwimmerEnv
-        wrapped_env = ImprovedMixedSwimmerEnv(n_links=5)
+        from swimmer.environments.mixed_environment import MixedSwimmerEnv
+        wrapped_env = MixedSwimmerEnv(n_links=5)
         physics = wrapped_env.physics
         env = wrapped_env.env
         

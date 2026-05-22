@@ -60,7 +60,7 @@ def test_trajectory_plots_with_zones():
     env.close()
     
     print(f"\n📊 Check the generated trajectory plots:")
-    print(f"   📈 outputs/curriculum_training/plots/test_trajectory_zones_phase_*.png")
+    print(f"   📈 results/curriculum_training/plots/test_trajectory_zones_phase_*.png")
     print(f"   🔍 Look for: Green circles representing land zones in the top-left panel")
 
 
@@ -218,14 +218,14 @@ if __name__ == "__main__":
     
     print(f"\n📁 Generated Files for Review:")
     print("📊 Trajectory Analysis Plots (with zone circles):")
-    print("   outputs/curriculum_training/plots/test_trajectory_zones_phase_1.png")
-    print("   outputs/curriculum_training/plots/test_trajectory_zones_phase_2.png")
-    print("   outputs/curriculum_training/plots/test_trajectory_zones_phase_3.png") 
-    print("   outputs/curriculum_training/plots/test_trajectory_zones_phase_4.png")
+    print("   results/curriculum_training/plots/test_trajectory_zones_phase_1.png")
+    print("   results/curriculum_training/plots/test_trajectory_zones_phase_2.png")
+    print("   results/curriculum_training/plots/test_trajectory_zones_phase_3.png") 
+    print("   results/curriculum_training/plots/test_trajectory_zones_phase_4.png")
     
     print("\n🎬 Test Videos:")
-    print("   outputs/curriculum_training/videos/test_minimap_visualization.mp4 (WITH minimap)")
-    print("   outputs/curriculum_training/videos/test_no_minimap_visualization.mp4 (without minimap)")
+    print("   results/curriculum_training/videos/test_minimap_visualization.mp4 (WITH minimap)")
+    print("   results/curriculum_training/videos/test_no_minimap_visualization.mp4 (without minimap)")
     
     print(f"\n🎯 Compare the videos to see:")
     print("   • Minimap version: Red swimmer dot, green trail, brown zone circles")

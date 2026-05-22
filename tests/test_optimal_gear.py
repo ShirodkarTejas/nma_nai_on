@@ -5,7 +5,7 @@ Test optimal gear ratio for effective swimming.
 
 import numpy as np
 from swimmer.environments.physics_fix import test_optimal_gear_ratio, create_fixed_swimmer_env
-from swimmer.environments.mixed_environment import ImprovedMixedSwimmerEnv
+from swimmer.environments.mixed_environment import MixedSwimmerEnv
 
 
 def main():
@@ -14,7 +14,7 @@ def main():
     # Test different gear ratios
     test_ratios = [0.1, 0.3, 0.5, 1.0, 1.5, 2.0, 3.0]
     
-    optimal_gear, results = test_optimal_gear_ratio(ImprovedMixedSwimmerEnv, test_ratios)
+    optimal_gear, results = test_optimal_gear_ratio(MixedSwimmerEnv, test_ratios)
     
     if optimal_gear:
         print(f"\n🎯 Recommended gear ratio: {optimal_gear}")

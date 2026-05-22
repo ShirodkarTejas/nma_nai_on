@@ -9,8 +9,6 @@ import json
 import time
 from datetime import datetime
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')  # Force non-interactive backend
 import matplotlib.pyplot as plt
 import pandas as pd
 from collections import defaultdict
@@ -19,7 +17,7 @@ class TrainingLogger:
     """
     Comprehensive training logger for tracking and visualizing training progress.
     """
-    def __init__(self, log_dir='outputs/training_logs', experiment_name=None):
+    def __init__(self, log_dir='results/training_logs', experiment_name=None):
         self.log_dir = log_dir
         self.experiment_name = experiment_name or f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.log_path = os.path.join(log_dir, self.experiment_name)
@@ -99,23 +97,24 @@ class TrainingLogger:
         if max_velocity is not None:
             self.log_metric('max_velocity', max_velocity)
     
-    def log_training_step(self, data_dict=None, loss=None, policy_loss=None, value_loss=None, 
+    def log_training_step(self, data_dict=None, loss=None, policy_loss=None, value_loss=None,
                          entropy=None, learning_rate=None):
         """Log training step metrics - accepts either dict or individual parameters."""
-        # **FIXED**: Handle dictionary input from curriculum trainer
         if data_dict is not None:
             # Extract episode-level data
             if 'episode' in data_dict:
                 self.current_episode = max(self.current_episode, data_dict['episode'])
             if 'step' in data_dict:
                 self.current_step = max(self.current_step, data_dict['step'])
-            
-            # Log episode reward and distance if present
-            if 'reward' in data_dict:
-                self.log_metric('episode_reward', data_dict['reward'])
-            if 'distance' in data_dict:
-                self.log_metric('episode_distance', data_dict['distance'])
-            
+
+            # Support both 'reward'/'distance' and 'episode_reward'/'episode_distance' key variants
+            reward   = data_dict.get('episode_reward',   data_dict.get('reward'))
+            distance = data_dict.get('episode_distance', data_dict.get('distance'))
+            if reward is not None:
+                self.log_metric('episode_reward', reward)
+            if distance is not None:
+                self.log_metric('episode_distance', distance)
+
             # Log other metrics
             if 'mean_reward_10' in data_dict:
                 self.log_metric('mean_reward_10', data_dict['mean_reward_10'])
@@ -125,6 +124,20 @@ class TrainingLogger:
                 self.log_metric('phase', data_dict['phase'])
             if 'progress' in data_dict:
                 self.log_metric('progress', data_dict['progress'])
+            if 'neuromod_variance' in data_dict:
+                self.log_metric('neuromod_variance', data_dict['neuromod_variance'])
+
+            # Populate episode_data so episodes.json contains useful records
+            if reward is not None and distance is not None:
+                self.episode_data.append({
+                    'episode':           data_dict.get('episode', self.current_episode),
+                    'step':              data_dict.get('step',    self.current_step),
+                    'reward':            float(reward),
+                    'distance':          float(distance),
+                    'phase':             data_dict.get('phase'),
+                    'neuromod_variance': data_dict.get('neuromod_variance'),
+                    'timestamp':         time.time(),
+                })
         
         # Handle individual parameters (original functionality)
         if loss is not None:
@@ -149,6 +162,16 @@ class TrainingLogger:
         
         with open(self.episode_file, 'w') as f:
             json.dump(self.episode_data, f, indent=2)
+
+    def _resolve_xmax(self, x_values):
+        """Pick dynamic x-axis upper bound from data and configured training steps."""
+        if not x_values:
+            return None
+        xmax = float(max(x_values))
+        configured_steps = self.training_config.get('training_steps')
+        if isinstance(configured_steps, (int, float)) and configured_steps > 0:
+            xmax = max(xmax, float(configured_steps))
+        return xmax if xmax > 0 else None
     
     def create_training_plots(self, save_plots=True):
         """Create comprehensive training visualization plots."""
@@ -176,6 +199,9 @@ class TrainingLogger:
             ax1.set_title('Episode Rewards Over Time')
             ax1.set_xlabel('Episode')
             ax1.set_ylabel('Reward')
+            x_max = self._resolve_xmax(episodes)
+            if x_max is not None:
+                ax1.set_xlim(0, x_max)
             ax1.legend()
             ax1.grid(True, alpha=0.3)
         
@@ -195,6 +221,9 @@ class TrainingLogger:
             ax2.set_title('Episode Distances Over Time')
             ax2.set_xlabel('Episode')
             ax2.set_ylabel('Distance')
+            x_max = self._resolve_xmax(episodes)
+            if x_max is not None:
+                ax2.set_xlim(0, x_max)
             ax2.legend()
             ax2.grid(True, alpha=0.3)
         
@@ -218,6 +247,13 @@ class TrainingLogger:
             ax3.set_title('Training Losses')
             ax3.set_xlabel('Training Step')
             ax3.set_ylabel('Loss')
+            x_values = []
+            for metric_name in ('loss', 'policy_loss', 'value_loss'):
+                if metric_name in self.metrics:
+                    x_values.extend([m['step'] for m in self.metrics[metric_name]])
+            x_max = self._resolve_xmax(x_values)
+            if x_max is not None:
+                ax3.set_xlim(0, x_max)
             ax3.legend()
             ax3.grid(True, alpha=0.3)
         
@@ -238,6 +274,10 @@ class TrainingLogger:
                 ax4_twin.plot(episodes, velocities, 'orange', alpha=0.7, label='Avg Velocity')
                 ax4_twin.set_ylabel('Average Velocity', color='orange')
                 ax4_twin.tick_params(axis='y', labelcolor='orange')
+
+            x_max = self._resolve_xmax(episodes)
+            if x_max is not None:
+                ax4.set_xlim(0, x_max)
             
             ax4.set_title('Environment Transitions and Velocity')
             ax4.grid(True, alpha=0.3)

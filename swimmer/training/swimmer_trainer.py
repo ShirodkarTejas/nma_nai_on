@@ -7,9 +7,10 @@ Contains trainer classes for RL training of swimmer models.
 import torch
 import numpy as np
 import os
+from pathlib import Path
 import tonic
 import tonic.torch
-from ..environments.mixed_environment import ImprovedMixedSwimmerEnv
+from ..environments.mixed_environment import MixedSwimmerEnv
 from ..environments.tonic_wrapper import TonicSwimmerWrapper
 from ..models.ncap_swimmer import NCAPSwimmer
 from ..models.tonic_ncap import create_tonic_ncap_model
@@ -20,24 +21,55 @@ class SwimmerTrainer:
     Trainer class for swimmer models using RL algorithms.
     Supports NCAP and MLP models with PPO and other algorithms.
     """
-    def __init__(self, model_type='ncap', algorithm='ppo', n_links=6, 
-                 training_steps=500000, save_steps=100000, 
-                 output_dir='outputs/training', log_episodes=10, action_scale=1.0):
+    def __init__(
+        self,
+        model_type='ncap',
+        algorithm='ppo',
+        n_links=6,
+        training_steps=2000000,
+        save_steps=100000,
+        output_dir=None,
+        log_dir='results/manual_run',
+        log_episodes=10,
+        action_scale=1.0,
+        sparse_init: bool = False,
+        sparse_reg_lambda: float = 0.0,
+        force_oscillation: bool = False,
+    ):
         self.model_type = model_type.lower()
         self.algorithm = algorithm.lower()
         self.n_links = n_links
         self.training_steps = training_steps
         self.save_steps = save_steps
-        self.output_dir = output_dir
         self.log_episodes = log_episodes
+        self.sparse_init = bool(sparse_init)
+        self.sparse_reg_lambda = float(sparse_reg_lambda)
+        self.force_oscillation = bool(force_oscillation)
+        self.prior_modulation_scale = 0.15 if self.sparse_init else 0.0
+        self.effective_prior_lambda = self.sparse_reg_lambda
+
+        base_artifact_dir = Path(log_dir or output_dir or 'results/manual_run').resolve()
+        self.log_dir = str(base_artifact_dir)
+        self.output_dir = str(base_artifact_dir / "models")
+        self.training_log_dir = str(base_artifact_dir / "logs")
+        self.tonic_log_dir = str(base_artifact_dir / "tonic")
+        self.eval_output_dir = str(base_artifact_dir / "mixed_env")
+
+        # Backward-compatible aliases for legacy helper methods.
+        self.use_sparse_priors = self.sparse_init
+        self.prior_lambda = self.sparse_reg_lambda
+        self._sparse_prior_cache = None
 
         # Store the action scaling factor so that environments and wrappers
         # that depend on it (e.g.
         # `TonicSwimmerWrapper` in `create_tonic_environment`) can access it.
         self.action_scale = action_scale
         
-        # Create output directory
-        os.makedirs(output_dir, exist_ok=True)
+        # Create artifact directories
+        os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.training_log_dir, exist_ok=True)
+        os.makedirs(self.tonic_log_dir, exist_ok=True)
+        os.makedirs(self.eval_output_dir, exist_ok=True)
         
         # Check for GPU
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -52,13 +84,37 @@ class SwimmerTrainer:
         # Initialize training logger
         experiment_name = f"{self.model_type}_{self.algorithm}_{self.n_links}links"
         self.logger = TrainingLogger(
-            log_dir='outputs/training_logs',
+            log_dir=self.training_log_dir,
             experiment_name=experiment_name
         )
+
+    def _prepare_sparse_priors(self, num_segments: int):
+        """Load sparse priors once when sparse init or sparse reg is enabled."""
+        if not self.sparse_init and self.effective_prior_lambda <= 0.0:
+            return None
+        if self._sparse_prior_cache is not None:
+            return self._sparse_prior_cache
+        from NMAP.connectome_priors.swimmer_priors import generate_ncap_segment_priors, refresh_inventory_files
+
+        inventory_refresh = {"status": "skipped"}
+        try:
+            inventory_refresh = refresh_inventory_files()
+            inventory_refresh["status"] = "ok"
+        except Exception as exc:
+            inventory_refresh = {"status": "error", "reason": str(exc)}
+
+        priors = generate_ncap_segment_priors(num_segments=int(max(1, num_segments)))
+        metadata = priors.get("metadata", {}) if isinstance(priors, dict) else {}
+        if isinstance(metadata, dict):
+            metadata["inventory_refresh"] = inventory_refresh
+            if isinstance(priors, dict):
+                priors["metadata"] = metadata
+        self._sparse_prior_cache = priors
+        return self._sparse_prior_cache
         
     def create_environment(self):
         """Create the training environment."""
-        return ImprovedMixedSwimmerEnv(n_links=self.n_links)
+        return MixedSwimmerEnv(n_links=self.n_links)
     
     def create_tonic_environment(self):
         """Create Tonic-compatible environment (no action scaling needed)."""
@@ -72,7 +128,14 @@ class SwimmerTrainer:
     
     def create_tonic_ncap_model(self, n_joints):
         """Create Tonic-compatible NCAP model."""
-        model = create_tonic_ncap_model(n_joints=n_joints, oscillator_period=60, memory_size=10)
+        self._prepare_sparse_priors(num_segments=n_joints)
+        model = create_tonic_ncap_model(
+            n_joints=n_joints,
+            oscillator_period=60,
+            memory_size=10,
+            num_segments=max(1, int(n_joints)),
+            prior_modulation_scale=self.prior_modulation_scale,
+        )
         model.to(self.device)
         return model
     
@@ -90,27 +153,26 @@ class SwimmerTrainer:
         else:
             raise ValueError(f"Unknown model type: {self.model_type}")
     
-    def create_ppo_agent(self, model):
-        """Create PPO agent with the given model."""
-        # This would use Tonic's PPO implementation
-        # For now, we'll create a simple wrapper
-        return PPOAgent(model)
-    
-    def create_tonic_ppo_agent(self, model):
-        """Create Tonic-compatible agent for evaluation.
+    def create_tonic_agent(self, model):
+        """Create the functional Tonic agent according to the algorithm toggle."""
+        from .custom_tonic_agent import CustomA2C, CustomPPO
 
-        Training currently uses A2C via CustomA2C; for evaluation we can
-        reuse the same lightweight wrapper instead of the removed CustomPPO.
-        """
-        from .custom_tonic_agent import CustomA2C
-        return CustomA2C(model=model)
-    
-    def create_agent(self, model):
-        """Create agent based on algorithm."""
         if self.algorithm == 'ppo':
-            return self.create_ppo_agent(model)
+            agent_cls = CustomPPO
+        elif self.algorithm == 'a2c':
+            agent_cls = CustomA2C
         else:
             raise ValueError(f"Unknown algorithm: {self.algorithm}")
+
+        return agent_cls(
+            model=model,
+            prior_reg_lambda=self.effective_prior_lambda,
+            force_oscillation=self.force_oscillation,
+        )
+    
+    def create_agent(self, model):
+        """Return the single supported training agent implementation."""
+        return self.create_tonic_agent(model)
     
     def train_with_tonic(self):
         """Train using Tonic framework."""
@@ -120,8 +182,7 @@ class SwimmerTrainer:
         
         # Set up Tonic logger with proper directory
         import tonic
-        log_dir = os.path.join('outputs', 'training_logs', f'{self.model_type}_{self.algorithm}_{self.n_links}links_tonic')
-        tonic.logger.initialize(path=log_dir)
+        tonic.logger.initialize(path=self.tonic_log_dir)
         
         # Log training configuration
         config = {
@@ -132,7 +193,11 @@ class SwimmerTrainer:
             'save_steps': self.save_steps,
             'device': str(self.device),
             'log_episodes': self.log_episodes,
-            'framework': 'tonic'
+            'framework': 'tonic',
+            'sparse_init': self.sparse_init,
+            'sparse_reg_lambda': self.effective_prior_lambda,
+            'prior_modulation_scale': self.prior_modulation_scale,
+            'force_oscillation': self.force_oscillation,
         }
         self.logger.log_config(config)
         self.logger.start_training()
@@ -154,7 +219,7 @@ class SwimmerTrainer:
         print(f"Model moved to device: {self.device}")
         
         # Create agent
-        agent = self.create_tonic_ppo_agent(model)
+        agent = self.create_tonic_agent(model)
         
         # Create trainer with custom callbacks for logging
         trainer = tonic.Trainer(
@@ -375,7 +440,7 @@ class SwimmerTrainer:
             'lengths': total_lengths
         }
     
-    def evaluate_mixed_environment(self, max_frames=1800, speed_factor=1.0):
+    def evaluate_mixed_environment(self, max_frames=5000, speed_factor=1.0):
         """Evaluate the trained model in the mixed environment using existing infrastructure."""
         if self.model is None:
             raise ValueError("No model loaded. Train or load a model first.")
@@ -383,13 +448,13 @@ class SwimmerTrainer:
         print(f"Evaluating model in mixed environment for {max_frames} frames...")
         
         # Import the existing test function and modify it to use our trained model
-        from ..environments.mixed_environment import ImprovedMixedSwimmerEnv
+        from ..environments.mixed_environment import MixedSwimmerEnv
         from ..utils.visualization import create_comprehensive_visualization, create_parameter_log
         import imageio
         import time
         
         # Create mixed environment
-        env = ImprovedMixedSwimmerEnv(n_links=self.n_links, speed_factor=speed_factor)
+        env = MixedSwimmerEnv(n_links=self.n_links, speed_factor=speed_factor)
         physics = env.physics
         action_spec = env.action_spec
         n_joints = action_spec.shape[0]
@@ -403,16 +468,60 @@ class SwimmerTrainer:
         environment_history = []
         
         # Video generation
-        os.makedirs("outputs/improved_mixed_env", exist_ok=True)
-        video_filename = f"outputs/improved_mixed_env/trained_model_evaluation_{self.n_links}links.mp4"
-        plot_filename = f"outputs/improved_mixed_env/trained_model_analysis_{self.n_links}links.png"
-        log_filename = f"outputs/improved_mixed_env/trained_model_log_{self.n_links}links.txt"
+        os.makedirs(self.eval_output_dir, exist_ok=True)
+        video_filename = os.path.join(self.eval_output_dir, f"trained_model_evaluation_{self.n_links}links.mp4")
+        plot_filename = os.path.join(self.eval_output_dir, f"trained_model_analysis_{self.n_links}links.png")
+        log_filename = os.path.join(self.eval_output_dir, f"trained_model_log_{self.n_links}links.txt")
         
         frame_count = 0
         frames = []
+        reset_rng = np.random.default_rng(42)
+
+        def _reset_with_randomized_start():
+            """Reset env and jitter initial pose so evaluation requires navigation."""
+            reset_obs = env.reset()
+            try:
+                with physics.reset_context():
+                    qpos = physics.data.qpos.copy()
+                    qvel = physics.data.qvel.copy()
+                    base_xy = qpos[:2].copy()
+                    target_xy = None
+                    try:
+                        target_xy = np.asarray(physics.named.model.geom_pos['target'][:2], dtype=np.float64)
+                    except Exception:
+                        target_xy = None
+
+                    chosen_xy = base_xy
+                    for _ in range(24):
+                        offset = reset_rng.uniform(-0.55, 0.55, size=2)
+                        if np.linalg.norm(offset) < 0.2:
+                            continue
+                        candidate = base_xy + offset
+                        if target_xy is not None and np.linalg.norm(candidate - target_xy) < 0.5:
+                            continue
+                        chosen_xy = candidate
+                        break
+
+                    qpos[0] = float(chosen_xy[0])
+                    qpos[1] = float(chosen_xy[1])
+                    if qpos.size > 2:
+                        qpos[2:] += reset_rng.uniform(-0.03, 0.03, size=qpos.size - 2)
+                    qvel[:] = 0.0
+                    physics.data.qpos[:] = qpos
+                    physics.data.qvel[:] = qvel
+            except Exception:
+                # Fallback: inject a few random actions to move away from immediate spawn.
+                warmup_steps = int(reset_rng.integers(3, 8))
+                for _ in range(warmup_steps):
+                    warm_action = reset_rng.uniform(action_spec.minimum, action_spec.maximum)
+                    reset_obs, _, warm_done, _ = env.step(warm_action)
+                    if warm_done:
+                        reset_obs = env.reset()
+                        break
+            return reset_obs
         
         # Reset environment
-        obs = env.reset()
+        obs = _reset_with_randomized_start()
         
         try:
             camera = physics.render(camera_id=0, height=480, width=640)
@@ -484,7 +593,7 @@ class SwimmerTrainer:
                 print(f"Captured {frame_count} frames, Environment: {current_env}, Transitions: {env_transitions}")
             
             if done:
-                obs = env.reset()
+                obs = _reset_with_randomized_start()
         
         # Calculate final metrics
         total_time = time.time() - start_time
@@ -585,7 +694,7 @@ class SwimmerTrainer:
         self.model.to(self.device)
         
         # Create Tonic agent
-        self.agent = self.create_tonic_ppo_agent(self.model)
+        self.agent = self.create_tonic_agent(self.model)
         
         # Initialize agent
         self.agent.initialize(

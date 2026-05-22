@@ -8,7 +8,7 @@ import numpy as np
 import time
 import os
 from swimmer.models.ncap_swimmer import NCAPSwimmer, NCAPSwimmerActor
-from swimmer.environments.mixed_environment import ImprovedMixedSwimmerEnv
+from swimmer.environments.mixed_environment import MixedSwimmerEnv
 
 def test_long_duration_performance():
     """Test NCAP with longer duration and different parameters."""
@@ -22,7 +22,7 @@ def test_long_duration_performance():
         {'period': 60, 'steps': 20000, 'name': 'Very long (60 period, 20k steps)'},
     ]
     
-    env = ImprovedMixedSwimmerEnv(n_links=6)
+    env = MixedSwimmerEnv(n_links=6)
     
     results = []
     

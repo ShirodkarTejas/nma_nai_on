@@ -458,7 +458,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test land escape behavior")
     parser.add_argument("--model_path", type=str, help="Path to trained model (optional)")
     parser.add_argument("--n_links", type=int, default=5, help="Number of swimmer links")
-    parser.add_argument("--output_dir", type=str, default="outputs/land_escape_tests", 
+    parser.add_argument("--output_dir", type=str, default="results/land_escape_tests", 
                        help="Output directory for test results")
     
     args = parser.parse_args()

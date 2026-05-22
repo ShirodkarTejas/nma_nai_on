@@ -37,15 +37,29 @@ def graded(x):
 class BiologicalNCAPSwimmer(nn.Module):
     """
     Biologically Authentic NCAP Swimmer Implementation
-    
-    Key improvements over complex NCAP:
-    - NO LSTM memory system (biologically implausible)
-    - Direct parameter modulation (like neuromodulation)
-    - Environment-sensitive oscillator periods
-    - Viscosity-based amplitude scaling
-    - All adaptations through core biological parameters
+
+    Core biological circuit (no LSTM):
+    - Head CPG oscillators drive alternating dorsal/ventral activation
+    - B-neurons receive proprioceptive feedback from the previous joint
+    - Antagonistic muscle pairs (dorsal/ventral) produce net joint torque
+    - All weights are sign-constrained (excitatory ≥ 0, inhibitory ≤ 0)
+    - `graded()` clamps activations to [0, 1] matching biological saturation
+
+    Connectome-prior support (call `configure_sparse_priors()` after construction):
+    - `_sparse_prior_scalars`: dict of syn_* and dist_* values from Cook 2019
+    - `compute_topological_prior_loss(lambda_val)`: λ × Σ dist_p × ||w_p||²
     """
-    
+
+    # Maps pathway name → (param_name_prefixes_excitatory, param_name_prefixes_inhibitory)
+    _PATHWAY_PARAM_MAP = {
+        "ipsi_db":    (("muscle_d_d_", "muscle_ipsi"),    ()),
+        "ipsi_vb":    (("muscle_v_v_", "muscle_ipsi"),    ()),
+        "contra_db":  ((),  ("muscle_v_d_", "muscle_contra")),
+        "contra_vb":  ((),  ("muscle_d_v_", "muscle_contra")),
+        "next_db":    (("bneuron_d_prop_", "bneuron_prop"), ()),
+        "next_vb":    (("bneuron_v_prop_", "bneuron_prop"), ()),
+    }
+
     def __init__(self, n_joints, oscillator_period=60,
                  use_weight_sharing=True, use_weight_constraints=True,
                  include_proprioception=True, include_head_oscillators=True,
@@ -119,11 +133,75 @@ class BiologicalNCAPSwimmer(nn.Module):
             
             print(f"✅ Added biological environment adaptation (no LSTM)")
         
+        # Connectome sparse-prior storage (populated by configure_sparse_priors())
+        self._sparse_prior_scalars: dict = {}
+
         # Move to device
         self.to(self._device)
         if self._device.type == 'cuda':
             print(f"Biological NCAP model on GPU: {next(self.parameters()).device}")
-    
+
+    # ------------------------------------------------------------------
+    # Connectome-prior API
+    # ------------------------------------------------------------------
+
+    def configure_sparse_priors(self, scalars: dict) -> None:
+        """Store Cook-2019-derived prior scalars on the model.
+
+        Args:
+            scalars: dict with keys ``syn_{pathway}`` and ``dist_{pathway}``
+                     for each of the six pathways (ipsi_db, ipsi_vb, contra_db,
+                     contra_vb, next_db, next_vb).  Produced by
+                     ``generate_ncap_segment_priors()``.
+        """
+        self._sparse_prior_scalars = {k: float(v) for k, v in scalars.items()}
+
+    def _iter_pathway_params(self, pathway: str):
+        """Yield parameters that belong to *pathway*."""
+        if not hasattr(self, "params"):
+            return
+        exc_prefixes, inh_prefixes = self._PATHWAY_PARAM_MAP.get(pathway, ((), ()))
+        for name, param in self.params.items():
+            for prefix in exc_prefixes:
+                if name.startswith(prefix) or name == prefix:
+                    yield param
+                    break
+            else:
+                for prefix in inh_prefixes:
+                    if name.startswith(prefix) or name == prefix:
+                        yield param
+                        break
+
+    def compute_topological_prior_loss(self, lambda_val: float) -> torch.Tensor:
+        """Topological L2 regularisation loss.
+
+        For each of the six Cook-2019 pathways computes:
+
+            loss += lambda_val × dist_pathway × Σ(w²)
+
+        where *dist_pathway* is the mean anatomical distance (normalised to
+        [0, 1]) between the pre- and post-synaptic neurons.  Long-range
+        connections are penalised proportionally more.
+
+        Returns a scalar tensor (0.0 when lambda_val ≤ 0 or no priors loaded).
+        """
+        device = next(self.parameters()).device
+        zero = torch.zeros((), device=device, dtype=torch.float32)
+        if lambda_val <= 0.0 or not self._sparse_prior_scalars:
+            return zero
+
+        total = zero.clone()
+        for pathway in self._PATHWAY_PARAM_MAP:
+            dist = float(self._sparse_prior_scalars.get(f"dist_{pathway}", 1.0))
+            terms = [
+                (p ** 2).sum()
+                for p in self._iter_pathway_params(pathway)
+            ]
+            if terms:
+                total = total + dist * torch.stack(terms).sum()
+
+        return lambda_val * total
+
     def reset(self):
         """Reset timestep."""
         self.timestep = 0
@@ -171,36 +249,55 @@ class BiologicalNCAPSwimmer(nn.Module):
         
         if environment_type is not None and self.include_environment_adaptation:
             try:
-                # Batched environment adaptation
-                env_tensor = torch.as_tensor(environment_type, device=joint_pos.device, dtype=torch.float32)
-                if env_tensor.dim() == 1:
-                    env_tensor = env_tensor.unsqueeze(0).expand(joint_pos.shape[0], -1)
+                # FIXED: Handle tensor inputs properly to avoid scalar conversion errors
+                if isinstance(environment_type, torch.Tensor):
+                    # Convert tensor to list for unpacking
+                    env_values = environment_type.detach().cpu().numpy().tolist()
+                    if len(env_values) >= 3:
+                        water_flag, land_flag, viscosity_norm = env_values[:3]
+                    elif len(env_values) == 2:
+                        water_flag, land_flag = env_values[:2]
+                        viscosity_norm = 0.1  # Default viscosity
+                    else:
+                        water_flag = env_values[0]
+                        land_flag = 1.0 - water_flag
+                        viscosity_norm = 0.1  # Default viscosity
+                else:
+                    # Handle list/array inputs
+                    water_flag, land_flag, viscosity_norm = environment_type
                 
-                water_flag = env_tensor[:, 0]
-                land_flag = env_tensor[:, 1]
-                viscosity_norm = env_tensor[:, 2] if env_tensor.shape[1] >= 3 else torch.zeros_like(water_flag) + 0.1
+                # **Viscosity-based amplitude scaling** (like changing muscle strength)
+                # Higher viscosity = need more force, like real swimming/crawling
+                amplitude_scale = 1.0 + self.viscosity_sensitivity * viscosity_norm
+                amplitude_scale = torch.clamp(amplitude_scale, 0.3, 2.0)  # Biological limits
                 
-                # Viscosity-based amplitude scaling
-                amplitude_scale = (1.0 + self.viscosity_sensitivity * viscosity_norm).clamp(0.3, 2.0)
+                # **Environment-specific period modulation** (like changing gait frequency)
+                # Land = slower, more deliberate movements; Water = faster, fluid movements
+                # FIXED: Handle tensor boolean properly
+                if isinstance(land_flag, torch.Tensor):
+                    land_flag_value = float(land_flag.item())
+                elif isinstance(land_flag, (list, tuple)):
+                    land_flag_value = float(land_flag[0])
+                else:
+                    land_flag_value = float(land_flag)
                 
-                # Environment-specific period modulation
-                land_mask = land_flag > 0.5
-                period_modulation = torch.where(land_mask, 1.0 + self.oscillator_sensitivity * 0.5, 
-                                              1.0 - self.oscillator_sensitivity * 0.3).clamp(0.5, 2.0)
-                environment_modulation = torch.where(land_mask, self.land_adaptation, self.water_adaptation)
+                if land_flag_value > 0.5:  # In land
+                    period_modulation = 1.0 + self.oscillator_sensitivity * 0.5  # Slower on land
+                    environment_modulation = self.land_adaptation
+                else:  # In water
+                    period_modulation = 1.0 - self.oscillator_sensitivity * 0.3  # Faster in water  
+                    environment_modulation = self.water_adaptation
                 
-                # Update oscillator period
-                self.current_oscillator_period = (self.base_oscillator_period * period_modulation).clamp(10, 120)
+                period_modulation = torch.clamp(period_modulation, 0.5, 2.0)  # Biological limits
+                
+                # Update oscillator period for more authentic biological adaptation
+                self.current_oscillator_period = int(self.base_oscillator_period * period_modulation.item())
+                self.current_oscillator_period = max(10, min(self.current_oscillator_period, 120))
                 
             except Exception as e:
                 print(f"Warning: Biological adaptation failed: {e}")
-                amplitude_scale = torch.ones(joint_pos.shape[0], device=joint_pos.device)
-                environment_modulation = torch.zeros(joint_pos.shape[0], device=joint_pos.device)
-                self.current_oscillator_period = torch.tensor(self.base_oscillator_period, device=joint_pos.device)
-        else:
-            amplitude_scale = torch.ones(joint_pos.shape[0], device=joint_pos.device)
-            environment_modulation = torch.zeros(joint_pos.shape[0], device=joint_pos.device)
-            self.current_oscillator_period = torch.tensor(self.base_oscillator_period, device=joint_pos.device)
+                amplitude_scale = 1.0
+                environment_modulation = 0.0
         
         # Normalize joint positions to [-1, 1] (proper NCAP input range)
         joint_limit = 2 * np.pi / (self.n_joints + 1)  # As in notebook
@@ -228,8 +325,8 @@ class BiologicalNCAPSwimmer(nn.Module):
                 
                 # **BIOLOGICAL ADAPTATION**: Modulate proprioception by environment
                 if self.include_environment_adaptation:
-                    prop_strength_d = prop_strength_d * (1.0 + environment_modulation.unsqueeze(-1))
-                    prop_strength_v = prop_strength_v * (1.0 + environment_modulation.unsqueeze(-1))
+                    prop_strength_d = prop_strength_d * (1.0 + environment_modulation)
+                    prop_strength_v = prop_strength_v * (1.0 + environment_modulation)
                 
                 bneuron_d = bneuron_d + joint_pos_d[..., i-1, None] * prop_strength_d
                 bneuron_v = bneuron_v + joint_pos_v[..., i-1, None] * prop_strength_v
@@ -256,11 +353,11 @@ class BiologicalNCAPSwimmer(nn.Module):
                 
                 # **BIOLOGICAL ADAPTATION**: Modulate oscillator strength by environment
                 if self.include_environment_adaptation:
-                    osc_strength_d = osc_strength_d * (1.0 + environment_modulation.unsqueeze(-1))
-                    osc_strength_v = osc_strength_v * (1.0 + environment_modulation.unsqueeze(-1))
+                    osc_strength_d = osc_strength_d * (1.0 + environment_modulation)
+                    osc_strength_v = osc_strength_v * (1.0 + environment_modulation)
                 
-                bneuron_d = bneuron_d + oscillator_d.unsqueeze(-1) * osc_strength_d
-                bneuron_v = bneuron_v + oscillator_v.unsqueeze(-1) * osc_strength_v
+                bneuron_d = bneuron_d + oscillator_d * osc_strength_d
+                bneuron_v = bneuron_v + oscillator_v * osc_strength_v
             
             # 3. B-NEURON ACTIVATION (key biological constraint)
             bneuron_d = graded(bneuron_d)  # Clamp to [0, 1]
@@ -272,16 +369,16 @@ class BiologicalNCAPSwimmer(nn.Module):
             
             # **BIOLOGICAL ADAPTATION**: Environment affects muscle activation strength
             if self.include_environment_adaptation:
-                muscle_ipsi_strength = muscle_ipsi_strength * (1.0 + environment_modulation.unsqueeze(-1))
-                muscle_contra_strength = muscle_contra_strength * (1.0 + environment_modulation.unsqueeze(-1))
+                muscle_ipsi_strength = muscle_ipsi_strength * (1.0 + environment_modulation)
+                muscle_contra_strength = muscle_contra_strength * (1.0 + environment_modulation)
             
             muscle_d = graded(
                 bneuron_d * muscle_ipsi_strength +
                 bneuron_v * muscle_contra_strength
             )
             muscle_v = graded(
-                bneuron_v * exc(self.params[ws(f'muscle_v_v_{i}', 'muscle_ipsi')]) * (1.0 + environment_modulation.unsqueeze(-1) if self.include_environment_adaptation else 1.0) +
-                bneuron_d * inh(self.params[ws(f'muscle_v_d_{i}', 'muscle_contra')]) * (1.0 + environment_modulation.unsqueeze(-1) if self.include_environment_adaptation else 1.0)
+                bneuron_v * exc(self.params[ws(f'muscle_v_v_{i}', 'muscle_ipsi')]) * (1.0 + environment_modulation if self.include_environment_adaptation else 1.0) +
+                bneuron_d * inh(self.params[ws(f'muscle_v_d_{i}', 'muscle_contra')]) * (1.0 + environment_modulation if self.include_environment_adaptation else 1.0)
             )
             
             # 5. JOINT TORQUE: Antagonistic muscle contraction (KEY OUTPUT COMPUTATION)
@@ -292,7 +389,7 @@ class BiologicalNCAPSwimmer(nn.Module):
         base_torques = torch.cat(joint_torques, -1)
         
         # **BIOLOGICAL AMPLITUDE SCALING** (instead of LSTM memory)
-        final_torques = base_torques * amplitude_scale.unsqueeze(-1)
+        final_torques = base_torques * amplitude_scale
         
         # Add environment bias (like neuromodulator effect)
         if self.include_environment_adaptation:

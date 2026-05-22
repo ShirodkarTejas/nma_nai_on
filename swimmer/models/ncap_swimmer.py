@@ -373,14 +373,18 @@ class NCAPSwimmer(nn.Module):
         """
         with torch.no_grad():
             for name, p in self.params.items():
-                # Heuristic: muscles and b-neurons obey their designated sign
-                if 'muscle' in name or 'bneuron' in name or 'prop' in name or 'osc' in name:
-                    if 'contra' in name or 'v_d_' in name or 'muscle_contra' in name or '_v_' in name and 'muscle_v_d_' not in name:
-                        # Inhibitory
-                        p.clamp_(-1.0, 0.0)
-                    else:
-                        # Excitatory
-                        p.clamp_(0.0, 1.0)
+                # Explicit sign map:
+                # - Contra pathways (D-neuron cross-body projections) are inhibitory.
+                # - Ipsi pathways, oscillators, proprioception/next-neighbor coupling are excitatory.
+                is_contra_inhibitory = (
+                    name == 'muscle_contra'
+                    or name.startswith('muscle_d_v_')
+                    or name.startswith('muscle_v_d_')
+                )
+                if is_contra_inhibitory:
+                    p.clamp_(-1.0, 0.0)
+                else:
+                    p.clamp_(0.0, 1.0)
 
             # Environment modulation and memory adaptor weights should stay small
             small_modules = ['env_modulation', 'amplitude_modulation', 'memory_decoder']

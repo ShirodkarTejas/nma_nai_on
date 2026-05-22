@@ -84,8 +84,8 @@ def test_simple_ncap():
     axes[1].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('outputs/simple_ncap_analysis.png', dpi=150, bbox_inches='tight')
-    print("📊 Analysis plots saved to 'outputs/simple_ncap_analysis.png'")
+    plt.savefig('results/simple_ncap_analysis.png', dpi=150, bbox_inches='tight')
+    print("📊 Analysis plots saved to 'results/simple_ncap_analysis.png'")
     
     return actions, coupling_strength
 

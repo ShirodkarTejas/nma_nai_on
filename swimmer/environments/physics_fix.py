@@ -154,5 +154,5 @@ class FixedGearSwimmerEnv:
 
 def create_fixed_swimmer_env(n_links=5, gear_ratio=1.0):
     """Create swimmer environment with gear ratio fix applied."""
-    from .mixed_environment import ImprovedMixedSwimmerEnv
-    return FixedGearSwimmerEnv(ImprovedMixedSwimmerEnv, gear_ratio=gear_ratio, n_links=n_links) 
+    from .mixed_environment import MixedSwimmerEnv
+    return FixedGearSwimmerEnv(MixedSwimmerEnv, gear_ratio=gear_ratio, n_links=n_links) 

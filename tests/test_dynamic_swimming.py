@@ -109,8 +109,8 @@ def test_dynamic_swimming():
         axes[2].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('outputs/dynamic_swimming_test.png', dpi=150, bbox_inches='tight')
-    print("📊 Dynamic swimming plot saved to 'outputs/dynamic_swimming_test.png'")
+    plt.savefig('results/dynamic_swimming_test.png', dpi=150, bbox_inches='tight')
+    print("📊 Dynamic swimming plot saved to 'results/dynamic_swimming_test.png'")
     
     return actions_over_time, avg_action_range, coupling_detected
 
@@ -122,7 +122,7 @@ def test_trained_model_dynamic():
     try:
         # Load trained model
         trained = SimpleNCAPSwimmer(n_joints=5)
-        checkpoint = torch.load('outputs/training/improved_ncap_5links.pt', map_location='cpu')
+        checkpoint = torch.load('results/training/base_ncap_5links.pt', map_location='cpu')
         
         # Extract and load NCAP parameters
         ncap_params = {}
